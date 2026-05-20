@@ -53,7 +53,7 @@ def register_pipelines() -> Dict[str, Pipeline]:
     if update_vmms:
         ## Vessel Manoeuvring Models (VMMs)
         vessel_manoeuvring_models_pipeline = vessel_manoeuvring_models.create_pipeline()
-        ## Extended Kalman Filters
+        ## Extended Kalman Filters J: addding system matrix for abkowitzstyle matrixes
         for vmm in vmms:
             key = f"ek.{vmm}"
             ek_pipelines[key] = pipeline(
@@ -64,7 +64,7 @@ def register_pipelines() -> Dict[str, Pipeline]:
                 },
             )
     else:
-        vessel_manoeuvring_models_pipeline = Pipeline([])  # Dummy pipiline
+        vessel_manoeuvring_models_pipeline = Pipeline([])  # Dummy pipeline
         ek_pipelines = {"dummy": Pipeline([])}
     ## Ships:
     inputs = {vmm: vmm for vmm in vmms}
@@ -95,18 +95,21 @@ def register_pipelines() -> Dict[str, Pipeline]:
         )
 
     return_dict = {}
+    # creating default pipeline
     return_dict["__default__"] = (
         vessel_manoeuvring_models_pipeline
         + reduce(add, ek_pipelines.values())
         + ship_pipelines["wpcc"]
         + ship_pipelines["kvlcc2_hsva"]
     )
+    # creating pipeline for each ship
     for ship in ship_pipelines.keys():
         return_dict[ship] = (
             vessel_manoeuvring_models_pipeline
             + reduce(add, ek_pipelines.values())
             + ship_pipelines[ship]
         )
+    # creating pipelines for plotting
     for ship_name, model_test_ids_ in model_test_ids.items():
         return_dict[f"plot_{ship_name}"] = pipeline(
             pipeline_plot.create_pipeline(
