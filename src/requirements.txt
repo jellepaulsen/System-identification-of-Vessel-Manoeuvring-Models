@@ -481,10 +481,6 @@ pytz==2021.3
     # via
     #   babel
     #   pandas
-pywin32==227
-    # via jupyter-core
-pywinpty==1.1.6
-    # via terminado
 pyyaml==5.4.1
     # via
     #   jupyter-book
@@ -692,7 +688,7 @@ uc-micro-py==1.0.1
     # via linkify-it-py
 urllib3==1.26.8
     # via requests
-uvicorn[standard]==0.13.4
+uvicorn==0.13.4
     # via kedro-viz
 vessel-manoeuvring-models==0.0.1
     # via -r E:\dev\System-identification-of-Vessel-Manoeuvring-Models\src\requirements.in

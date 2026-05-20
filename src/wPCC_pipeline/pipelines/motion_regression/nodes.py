@@ -80,6 +80,13 @@ def fit_motions(
     )
 
     parameters = pd.DataFrame(regression.parameters)
+
+    # Free large data copies that are not needed by downstream nodes.
+    # data and data_prime are duplicates of the input — no downstream node uses them.
+    for attr in ["data", "data_prime"]:
+        if hasattr(regression, attr):
+            setattr(regression, attr, None)
+
     return regression, parameters
 
 
@@ -94,11 +101,18 @@ def motion_regression_summaries(regression: Regression) -> Union[str, str, str]:
 def motion_regression_plots(
     regression: Regression,
 ) -> Union[plt.figure, plt.figure, plt.figure]:
-    return (
+    figs = (
         regression.plot_pred_X().get_figure(),
         regression.plot_pred_Y().get_figure(),
         regression.plot_pred_N().get_figure(),
     )
+    # Free feature matrices after plotting — they are the largest objects
+    # on the Regression and are not needed by any downstream node.
+    for attr in ["X_N", "y_N", "X_Y", "y_Y", "X_X", "y_X"]:
+        if hasattr(regression, attr):
+            setattr(regression, attr, None)
+    plt.close("all")
+    return figs
 
 
 def create_model_from_motion_regression(regression: Regression) -> ModelSimulator:

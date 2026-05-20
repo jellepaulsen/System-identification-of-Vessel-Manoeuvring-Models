@@ -19,3 +19,5 @@ regressions:  # (What kind of regression to perform)
 
 update_vmms: True  # Needs to be True the firs time...
 
+only_joined: True
+

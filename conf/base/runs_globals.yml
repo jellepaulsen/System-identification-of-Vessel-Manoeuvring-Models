@@ -8,11 +8,11 @@ model_test_ids:
   #- "22609"
   #- "22610"
   - "22611"  # ref speed 12
-  - "22612"
-  - "22613"
-  - "22614"
-  - "22615"
-  - "22616"
+  #- "22612"  # data not available
+  #- "22613"  # data not available
+  #- "22614"  # data not available
+  #- "22615"  # data not available
+  #- "22616"  # data not available
   #- "22631"
   #- "22632"
   #- "22633"
@@ -24,15 +24,15 @@ model_test_ids:
   - "22639" # ref speed 8
   #- "22762"
   #- "22763"
-  - "22764"  # ZZ10 SB (Report)
+  #- "22764"  # ZZ10 SB (Report) - data not available
   #- "22765"
   #- "22768"
-  - "22769"   # ZZ10 PS (Report)
-  - "22770"   # ZZ10 PS 
-  - "22771"   # ZZ20 SB
+  #- "22769"   # ZZ10 PS (Report) - data not available
+  - "22770"   # ZZ10 PS
+  #- "22771"   # ZZ20 SB - data not available
   - "22772"   # ZZ20 SB (Report)
   - "22773"   # ZZ20 PS (Report)
-  - "22774"   # circle (Report)
+  #- "22774"   # circle (Report) - data not available
   #- "22775"  # (Sailing test) 
   #- "22776"
   kvlcc2:

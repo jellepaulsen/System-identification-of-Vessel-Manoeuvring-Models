@@ -1,0 +1,53 @@
+Item,Description,Unit
+A_R,Lateral rudder area per rudder,m2
+B,ship beam,m
+CB,block coefficient,
+D,propeller diameter,m
+Hull/Acc/X1,Accelerometer surge,m/s2
+Hull/Acc/Y1,Accelerometer sway,m/s2
+Hull/Acc/Y2,Accelerometer sway,m/s2
+Hull/Acc/Z1,Accelerometer heave,m/s2
+Hull/Acc/Z2,Accelerometer heave,m/s2
+Hull/Acc/Z3,Accelerometer heave,m/s2
+I_z,ship yaw mass inertia (no added mass),kg*m2
+L,ship Lpp,m
+Prop/PS/Rpm,port propeller speed,1/s
+Prop/PS/Thrust,port propeller thrust,N
+Prop/PS/Torque,port propeller torque,Nm
+Prop/SB/Rpm,starboard propeller speed,1/s
+Prop/SB/Thrust,starboard propeller thrust,N
+Prop/SB/Torque,starboard propeller torque,Nm
+T,total thrust,N
+accelerometer1_x,Accelerometer 1 x coord fwd of lpp/2,m
+accelerometer1_y,Accelerometer 1 y coord tbd of CL,m
+accelerometer1_z,Accelerometer 1 z coord below WL,m
+accelerometer2_x,Accelerometer 2 x coord fwd of lpp/2,m
+accelerometer2_y,Accelerometer 2 y coord tbd of CL,m
+accelerometer2_z,Accelerometer 2 z coord below WL,m
+accelerometer3_x,Accelerometer 3 x coord fwd of lpp/2,m
+accelerometer3_y,Accelerometer 3 y coord tbd of CL,m
+accelerometer3_z,Accelerometer 3 z coord below WL,m
+b_R,Rudder span (moving part),m
+c_r,Chord length at the root,m
+c_t,Chord length at the tip,m
+delta,rudder angle,rad
+m,ship mass (excluding added mass),kg
+n_prop,Number of propellers,m
+pitch,pitch angle,rad
+psi,heading,rad
+rho,water density,kg/m3
+roll,roll angle,rad
+ship_speed,initial speed of test,m/s
+tdf,Thrust deduction factor,
+volume,ship dispacement,m3
+w_p0,wake factor,
+x0,ship origo (lpp/2) position x in global coordinates,m
+x_G,distance between measurement origo and c_G,m
+x_p,propeller longitudinal position from lpp/2,m
+x_r,rudder longitudinal position from lpp/2,m
+y0,ship origo (midship) position y in global coordinates,m
+y_R_port,Port rudder y coord.,m
+y_R_stbd,Starboard rudder y coord.,m
+y_p_port,Port propeller y coord.,m
+y_p_stbd,Starboard rudder y coord.,m
+z0,ship origo (WL) position z in global coordinates (heave),m

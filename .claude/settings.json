@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv --version)",
+      "Bash(uv venv:*)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(uv pip:*)",
+      "Bash(source /Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/.venv/bin/activate)",
+      "Bash(kedro info:*)",
+      "Bash(kedro registry:*)",
+      "Bash(kedro run:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(python3 -c \"from kedro_viz.integrations.kedro.sqlite_store import SQLiteStore; print\\(''OK''\\)\")",
+      "Bash(python3 -m wPCC_pipeline --help)",
+      "Bash(python3 -m wPCC_pipeline --pipeline wpcc)",
+      "Bash(PYTHONPATH=src:$PYTHONPATH python3 -m wPCC_pipeline --pipeline wpcc)",
+      "Bash(ls /Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/data/01_raw/wpcc/*.csv)",
+      "Bash(grep -h 'id = ' /Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/notebooks/*.ipynb)",
+      "Bash(ls -1 /Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/data/01_raw/wpcc/*.csv)",
+      "Bash(ls -1 /Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/data/01_raw/wpcc/*.csv 2)",
+      "Bash(/dev/null __NEW_LINE_ef5dc3f495d7eb90__ echo echo '=== KVLCC2 Raw Data ===')",
+      "Bash(ls -1 /Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/data/01_raw/kvlcc2/*.csv)",
+      "Bash(ls -1 /Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/data/01_raw/kvlcc2/*.csv 2)",
+      "Bash(/dev/null __NEW_LINE_ef5dc3f495d7eb90__ echo echo '=== KVLCC2_HSVA Raw Data ===')",
+      "Bash(ls -1 /Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/data/01_raw/kvlcc2_hsva/*.csv)",
+      "Read(//Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/**)",
+      "Bash(__NEW_LINE_aeaaa2bf5e692ea5__ echo:*)",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models",
+      "/Users/nsmirnov/dev/_probe/System-identification-of-Vessel-Manoeuvring-Models/conf/base/parameters",
+      "/tmp"
+    ]
+  }
+}
