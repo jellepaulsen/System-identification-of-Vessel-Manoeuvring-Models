@@ -1,0 +1,5 @@
+# added mass (hydromass)
+R1_munk: 0.025      
+R2_munk: 0.96        
+R3_munk: 0.89        
+C :      1.0	           # Lewis coefficient
