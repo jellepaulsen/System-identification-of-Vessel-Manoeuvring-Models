@@ -1,8 +1,15 @@
 """Project settings."""
+import asyncio
+from pathlib import Path
+
 from wPCC_pipeline.hooks import ProjectHooks
 from kedro.config import TemplatedConfigLoader  # NEU
 from kedro_viz.integrations.kedro.sqlite_store import SQLiteStore
-from pathlib import Path
+
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
 # Instantiate and list your project hooks here
 HOOKS = (ProjectHooks(),)
