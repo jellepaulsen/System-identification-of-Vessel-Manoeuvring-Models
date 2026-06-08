@@ -13,20 +13,25 @@ class Krylov_pre_calc:
         self.psi2p = self.kparams["psi2"] # psi2 parameters
 
         self.rho = self.sparams["rho"]
-        self.L = self.scale_dim(self.sparams["L"])
-        self.B = self.scale_dim(self.sparams["B"])
-        self.T = self.scale_dim(self.sparams["T"])
-        # self.dbh = self.scale_dim(self.kparams["dbh"]) # currently unknown 
-        self.xtg = self.scale_dim(self.sparams['x_G'])/self.L # distance from centerline to bilge keel, scaled with ship scale factor
-        self.volume = self.L * self.B * self.T * self.sparams["CB"]
+        self.L = self.scale_dim1D(self.sparams["L"])
+        self.B = self.scale_dim1D(self.sparams["B"])
+        self.Tm = self.scale_dim1D(self.sparams["Tm"])
+        # self.dbh = self.scale_dim1D(self.kparams["dbh"]) # currently unknown 
+        self.xtg = self.scale_dim1D(self.sparams['x_G'])/self.L # distance from centerline to bilge keel, scaled with ship scale factor
+        self.volume = self.L * self.B * self.Tm * self.sparams["CB"]
         self.m = self.volume * self.rho    #
         self.xtg = self.sparams['x_G']/self.L
+        self.askeg = self.scale_dim2D(self.sparams["askeg"])
         if self.L/self.B > 11:
             print("Krylov code only implemented for ships with L/B ratio less than 11")
             return
 
-    def scale_dim(self, value):
+    def scale_dim1D(self, value):
         return value * self.sparams["scale_factor"]
+    def scale_dim2D(self, value):
+        return value * self.sparams["scale_factor"]**2
+    def scale_dim3D(self, value):
+        return value * self.sparams["scale_factor"]**3
 
     def hydro_mass(self):
         # calculation of hydrodynamic mass using the Krylov code
@@ -124,8 +129,8 @@ class Krylov_forces:
         Uchar = np.sqrt(self.x0_[3]**2 + self.x0_[4]**2) # speed
         self.Fn = Uchar / np.sqrt(self.kpc.L * 9.81) # Froude number
 
-        xtg = self.kpc.sparams['x_G']/self.kpc.L
-        psi1 = (ta- tf) / self.kpc.L # tangent ot static trim angle
+        self.xtg = self.kpc.sparams['x_G']/self.kpc.L
+        self.psi1 = (ta- tf) / self.kpc.L # tangent ot static trim angle
 
 
         
@@ -152,7 +157,25 @@ class Krylov_forces:
                         a1 = self.coeffs(self.kpc.xtg, *xgr["a1"])
                         b1 = self.coeffs(self.kpc.xtg, *xgr["b1"])
                         c1 = self.coeffs(self.kpc.xtg, *xgr["c1"])
-                        self.psi2 = self.coeffs(self.Fn, a1, b1, c1)      
+                        self.psi2 = self.coeffs(self.Fn, a1, b1, c1)
+
+
+    def calc_sigma(self):
+        TmL = self.kpc.Tm / self.kpc.L
+        askeg = self.kpc.askeg
+        psi_res = self.psi1 + self.psi2
+        if self.kpc.sparams["shiptype"] == 1:
+            self.sigma =1.-(3./(20-i+0.000))*(askeg/(self.kpc.L*self.kpc.Tm))+(0.054/(TmL)) * psi_res
+        elif self.kpc.sparams["shiptype"] == 2:
+            self.sigma = 0.975 + 0.054/TmL * psi_res
+        elif self.kpc.sparams["shiptype"] == 3:
+            self.sigma = 0.962 + 0.054/ TmL * psi_res
+        
+        # lower limit
+        if self.sigma <= 0.93:
+            self.sigma = 0.93 
+        
+        self.Asigma = self.kpc.L * self.kpc.Tm * self.sigma
         
 
 if __name__ == "__main__":
