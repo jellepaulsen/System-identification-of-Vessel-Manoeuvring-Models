@@ -152,10 +152,7 @@ class Krylov_forces:
                         a1 = self.coeffs(self.kpc.xtg, *xgr["a1"])
                         b1 = self.coeffs(self.kpc.xtg, *xgr["b1"])
                         c1 = self.coeffs(self.kpc.xtg, *xgr["c1"])
-                        self.psi2 = self.coeffs(self.Fn, a1, b1, c1)
-
-
-        
+                        self.psi2 = self.coeffs(self.Fn, a1, b1, c1)      
         
 
 if __name__ == "__main__":
