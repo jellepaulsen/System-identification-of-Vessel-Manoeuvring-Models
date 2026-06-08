@@ -10,7 +10,10 @@ class Krylov_pre_calc:
         self.sparams = ship_parameters
         self.kparams = krylov_parameters
         self.eps = self.kparams["eps"]
-        self.psi2p = self.kparams["psi2"] # psi2 parameters
+        self.psi2p = self.kparams["psi_2"] # psi_2 parameters
+        self.c2p = self.kparams["c_2"] # c_2 parameters
+
+        self.cp = self.sparams["CB"]/self.sparams["CM"] # prismatic coefficient
 
         self.rho = self.sparams["rho"]
         self.L = self.scale_dim1D(self.sparams["L"])
@@ -161,22 +164,43 @@ class Krylov_forces:
 
 
     def calc_sigma(self):
-        TmL = self.kpc.Tm / self.kpc.L
+        self.TmL = self.kpc.Tm / self.kpc.L
         askeg = self.kpc.askeg
         psi_res = self.psi1 + self.psi2
         if self.kpc.sparams["shiptype"] == 1:
-            self.sigma =1.-(3./(20-i+0.000))*(askeg/(self.kpc.L*self.kpc.Tm))+(0.054/(TmL)) * psi_res
+            self.sigma =1.-(3./(20-i+0.000))*(askeg/(self.kpc.L*self.kpc.Tm))+(0.054/(self.TmL)) * psi_res
         elif self.kpc.sparams["shiptype"] == 2:
-            self.sigma = 0.975 + 0.054/TmL * psi_res
+            self.sigma = 0.975 + 0.054/self.TmL * psi_res
         elif self.kpc.sparams["shiptype"] == 3:
-            self.sigma = 0.962 + 0.054/ TmL * psi_res
+            self.sigma = 0.962 + 0.054/ self.TmL * psi_res
         
         # lower limit
         if self.sigma <= 0.93:
             self.sigma = 0.93 
         
-        self.Asigma = self.kpc.L * self.kpc.Tm * self.sigma
+        # lateral area A_{L sigma}
+        self.Asigma = self.kpc.L * self.kpc.Tm * self.sigma 
+
+    def calc_c2(self):
+        for tml in self.kpc.c2p.values():
+            if tml["tml"][0] <= self.Tml <= tml["tml"][1]:
+                a3 = self.coeffs(self.TmL, *tml["a3"])
+                b3 = self.coeffs(self.TmL, *tml["b3"])
         
+        a1 = 54.46*self.kpc.cp - 59.43
+        b1 = -31.44*self.kpc.cp + 46.8
+
+        U = a1 * self.sigma + b1
+
+        for U in self.kpc.c2p["U"].values():
+            if U["r"][0] <= self.x0_[3] <= U["r"][1]:
+                a2 = self.coeffs(self.x0_[3], *U["a2"])
+                b2 = self.coeffs(self.x0_[3], *U["b2"])
+        
+        Q = a2 * (self.kpc.L/ self.kpc.B) + b2
+        self.c2 = np.clip(a3 * Q + b3, 0.3, 1.6)
+
+
 
 if __name__ == "__main__":
     with open("conf/base/parameters/krylov.yml", "r") as f:
@@ -191,5 +215,7 @@ if __name__ == "__main__":
     kf.Fn = 0.50
     kf.kpc.xtg = -0.03
     kf.calc_psi2()
-    print(f"result: {kf.psi2}")
+    kf.krylov_force()
+    kf.calc_sigma()
+    print(f"result: {kf.sigma}")
 
