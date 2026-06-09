@@ -168,8 +168,11 @@ class Krylov_forces(Krylov_pre_calc):
         
     def get_cx0(self):
         # interpolate zerodrift resistance from resistance curve
-        self.cx0 = np.interp(self.Uchar, self.ship_resistance["kn"]*0.5144 , self.ship_resistance["kN"])
         
+        RTx0 = np.interp(self.Uchar, self.ship_resistance["kn"]*0.5144 , self.ship_resistance["kN"])
+
+        # NOTE: For catamaran the wetted area of demi hull is used!!! Whereas RT is for the whole ship!!
+        self.cx0 = RTx0 / (0.5 * self.rho * self.Uchar**2 * self.sp["S"]) 
 
     def eff_drift_angle(self, x0):
         if x0[4] >= self.eps:
@@ -345,7 +348,10 @@ class Krylov_forces(Krylov_pre_calc):
         a1x = 0.075  # parameter for thew method alway set to 0.075 in Krylov paper
         self.cn_beta = self.m1*np.sin(2*beta)+self.m2*np.sin(beta)+self.m3*(np.sin(2*beta)**3) + self.m4 * (np.sin(2*beta)**5)
 
-        self.cxb = -a1x * np.sin((np.pi-np.arcsin(self.cx0/a1x))*(1-(abs(beta)*180/np.pi/self.kp["psix"]))) 
+        self.cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(self.cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"]))) 
+        # 
+
+        print(f"cxb: {self.cxb}")
     
     def calc_cn(self, x0):
         cn0 = 0.059*self.c2
