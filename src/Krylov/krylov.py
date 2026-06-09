@@ -238,8 +238,46 @@ class Krylov_forces:
         U = a1 * self.LB + b1
         self.c3 = np.clip(a2 * U + b2, 0.0, 0.35)
 
-         
+    def calc_m1(self):
+        a1 = self.coeffs(self.kpc.TmL, -0.1317, 0.05358, 0.000181)
+        b1 = self.coeffs(self.kpc.TmL, -2.361, 0.8653, -0.000161)
+
+        if self.kpc.cp <= 0.72:
+            U0 = self.coeffs(self.sigma, -235, 474.2, 235.8)
+            SCP = self.coeffs(self.kpc.cp, -74.67, 110.9, -39.64)
+        elif self.kpc.cp > 0.72:
+            U0 = self.coeffs(self.sigma, -210, 422.9, 207.2)
+            SCP = self.coeffs(self.kpc.cp, 12, -8.8, -0.64)
         
+        UUU = U0 + SCP
+
+        if UUU >= 4:
+            Su = -1.3 * UUU + 7.8
+            Sv0 = self.coeffs(self.kpc.lb, 0.02333, -0.045, 1.187)
+        else:
+            Su = -1.3 * UUU + 2.6
+            Sv0 = self.coeffs(self.kpc.lb, 0.02333, -0.045, 1.187) + 0.01 * UUU 
+
+        S = Su + Sv0
+        self.m1 = np.clip(a1 * S + b1,0.02, 0.08)
+    
+    def calc_m2(self):
+        self.m2 = np.maximum(-(np.log(1.023 * self.sigma))/ (11.6* self.sigma -9.29), -0.01)
+         
+    def calc_m3(self):
+        self.sigma = np.maximum(self.sigma, 1)
+
+        a1 = 31.26 -9.0146 * np.exp(0.066947* self.kpc.LB)
+        b1 = 8.6245 * np.exp(0.071419* self.kpc.LB) - 32.26
+
+        a2 = (np.exp(8.20939* self.kpc.cp)* 0.7728*0.001-1.873)*0.001
+        b2 = (np.exp(7.47893* self.kpc.cp)*0.4404 * 0.01+5.709)*0.01
+
+        UUUU = (a1 * self.sigma + b1)/ (self.sigma -1.029)
+
+        self.m3 = np.clip(a2 * UUUU + b2, 0.016, 0.054)
+
+
 if __name__ == "__main__":
     with open("conf/base/parameters/krylov.yml", "r") as f:
         krylov_parameters = yaml.safe_load(f)
