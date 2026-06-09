@@ -59,9 +59,9 @@ class Krylov_pre_calc:
             qqq = -1.0 + self.dbh / self.B
             Akxx = 2. + np.exp(-qqq)
             Akyy = 2. -0.8*np.exp(-2.*qqq)
-            Corr_x=2.	
-            Corr_y = 2.-0.5*np.exp(-2.*qqq)
-            Corr_n=2.-0.65*np.exp(-2.*qqq)
+            self.Corr_x=2.	
+            self.Corr_y = 2.-0.5*np.exp(-2.*qqq)
+            self.Corr_n=2.-0.65*np.exp(-2.*qqq)
             m = self.sp["CB"]*self.rho*self.L*self.sp["B"]*self.T*2
             volume = self.L*self.sp["B"]*self.T*self.sp["CB"]
             self.hydro_mass["m11"] = m11 * Akxx
@@ -74,13 +74,13 @@ class Krylov_pre_calc:
             C = 1.0
 
             izz = m66 / 1.5
-            Corr_x = 1.0
-            Corr_y = 1.0
-            Corr_n = 1.0
+            self.Corr_x = 1.0
+            self.Corr_y = 1.0
+            self.Corr_n = 1.0
 
-            self.hydro_mass["m11"] = m11 * Corr_x
-            self.hydro_mass["m22"] = m22 * Corr_y
-            self.hydro_mass["m66"] = m66 * Corr_n
+            self.hydro_mass["m11"] = m11 * self.Corr_x
+            self.hydro_mass["m22"] = m22 * self.Corr_y
+            self.hydro_mass["m66"] = m66 * self.Corr_n
             self.hydro_mass["izz"] = izz
 
 
@@ -131,13 +131,34 @@ class Krylov_forces:
             # später kann es auch aus dem mittleren Tiefgang und dem Trim aus dem IMU berechnet werden zu Fahrtantritt
 
 
-        Uchar = np.sqrt(x0[3]**2 + x0[4]**2) # speed
-        self.Fn = Uchar / np.sqrt(self.kpc.L * 9.81) # Froude number
+        self.Uchar = np.sqrt(x0[3]**2 + x0[4]**2) # speed
+        self.Fn = self.Uchar / np.sqrt(self.kpc.L * 9.81) # Froude number
 
         self.xtg = self.kpc.sp['x_G']/self.kpc.L
         self.psi1 = (ta - tf) / self.kpc.L # tangent ot static trim angle
 
+        self.eff_drift_angle(x0) # self.beta_eff
+        self.calc_psi2()
+        self.calc_sigma()
+        self.calc_c2()
+        self.calc_c3()
+        self.calc_cy_beta()
+        self.calc_m1()
+        self.calc_m2()
+        self.calc_m3()
+        self.calc_m4()
+        self.calc_cn_beta()
+        self.calc_cn()
 
+        Umnos_fo = self.kpc.rho*self.Asigma*self.kpc.L/2
+        Umnos_cn = self.kpc.rho*self.Asigma*(self.Uchar**2)/2
+
+        return (
+            self.cxb * Umnos_fo     * self.kpc.Corr_x,
+            self.cy_beta * Umnos_fo * self.kpc.Corr_y,
+            self.cn * Umnos_cn * self.kpc.Corr_n
+
+        )
         
 
 
@@ -202,6 +223,23 @@ class Krylov_forces:
         Q = a2 * (self.kpc.L/ self.kpc.B) + b2
         self.c2 = np.clip(a3 * Q + b3, 0.3, 1.6)
 
+    def calc_c3(self):
+        a2 = self.coeffs(self.TmL, 2.269, -0.5805, 0.00183)
+        b2 = self.coeffs(self.TmL, -27.7, 6.428, -0.01749)
+
+        if self.kpc.cp <= 0.72:
+            a1 = self.coeffs(self.kpc.cp, 24.65, -29.67, 7.547)
+        elif self.kpc.cp > 0.72:
+            a1 = self.coeffs(self.kpc.cp, 0, 5.917, 5.3)
+
+        if self.kpc.cp <= 0.68:
+            b1 = self.coeffs(self.kpc.cp, -60.44, 74.61, 9.255)
+        elif self.kpc.cp > 0.68:
+            b1 = self.coeffs(self.kpc.cp, 0, 10.08, 20.34)
+
+        U = a1 * self.LB + b1
+        self.c3 = np.clip(a2 * U + b2, 0.0, 0.35)
+
     def calc_cy_beta(self):
         for lb in self.kpc.cy_betap.values():
             if lb["r"][0] <= self.kpc.LB <= lb["r"][1]:
@@ -219,24 +257,10 @@ class Krylov_forces:
         U = a1 * self.LB + b1
         Q = a2 * U + b2
 
-        self.cy_beta = np.clip(a3 * Q + b3, 0.0, 0.5)
+        cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 0.5)
+        self.cy_beta = 0.5* cy_beta_2 * np.sin(2.* self.beta_eff)* np.cos(self.beta_eff) + (self.c2*(np.sin(self.beta_eff)**2))+ self.c3*(np.sin(2*self.beta_eff)**4)* self.beta_eff_sign
 
-    def calc_c3(self):
-        a2 = self.coeffs(self.TmL, 2.269, -0.5805, 0.00183)
-        b2 = self.coeffs(self.TmL, -27.7, 6.428, -0.01749)
 
-        if self.kpc.cp <= 0.72:
-            a1 = self.coeffs(self.kpc.cp, 24.65, -29.67, 7.547)
-        elif self.kpc.cp > 0.72:
-            a1 = self.coeffs(self.kpc.cp, 0, 5.917, 5.3)
-
-        if self.kpc.cp <= 0.68:
-            b1 = self.coeffs(self.kpc.cp, -60.44, 74.61, 9.255)
-        elif self.kpc.cp > 0.68:
-            b1 = self.coeffs(self.kpc.cp, 0, 10.08, 20.34)
-
-        U = a1 * self.LB + b1
-        self.c3 = np.clip(a2 * U + b2, 0.0, 0.35)
 
     def calc_m1(self):
         a1 = self.coeffs(self.kpc.TmL, -0.1317, 0.05358, 0.000181)
@@ -301,6 +325,34 @@ class Krylov_forces:
         Su = 0.00827 * UUUUU - 0.017
 
         self.m4 = np.clip(Sm4 + Su, 0.03, 0.04)
+
+    def calc_cn_beta(self):
+        beta = self.beta_eff
+        a1x = 0.075  # parameter for thew method alway set to 0.075 in Krylov paper
+        self.cn_beta = self.m1*np.sin(2*beta)+self.m2*np.sin(beta)+self.m3*(np.sin(2*beta)**3) + self.m4 * (np.sin(2*beta)**5)
+
+        self.cxb = -a1x * np.sin((np.pi()-np.arcsin(self.cx0/self.kpc.kp["a1x"]))*(1-(abs(beta)*180/np.pi()/self.kpc.kp["psix"]))) 
+    
+    def calc_cn(self):
+        cn0 = 0.059*self.c2
+        cnw2= (0.739 +8.7 * self.TmL)*(1.611*(self.sigma**2)-2.873*self.sigma+1.33)
+
+        a1 = 0.09-cnw2 - 0.0033*(self.kpc.LB -7)-20*((self.TmL-0.005)**2)+ 0.4*(self.sigma-0.9)+ 0.05*(self.kpc.sp["CM"]-0.9)
+        a2 = 0.008*self.kpc.LB + 0.9 *(self.TmL -0.05) + 0.45*(self.sigma-0.955)
+
+        cnw = cnw2 + a1 *abs(np.sin(self.beta_eff))+ a2 * (1-np.cos( (2*np.pi()-4*abs(self.beta_eff))*np.cos(self.beta_eff)+0.1*abs(np.sin(2*self.beta_eff))))
+
+        if self.Uchar > self.kpc.eps:
+            omega_strich = self.omega * self.kpc.L/ self.Uchar
+            omega_large = omega_strich /np.sqrt(1+omega_strich**2)
+        else:
+            omega_large = 1.0 
+
+        cnom = -cn0*abs(self.omega)* self.omega*self.kpc.L**2 - cnw/ np.pi()*(self.Uchar**2 +(self.omega**2)*self.kpc.L**2)* np.sin(np.pi()*omega_large)
+
+        self.cn = cnom +self.cn_beta*self.Uchar**2 # called cn_full
+
+        
      
 
 
