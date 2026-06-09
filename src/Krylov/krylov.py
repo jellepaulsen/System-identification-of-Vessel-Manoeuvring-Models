@@ -276,6 +276,32 @@ class Krylov_forces:
         UUUU = (a1 * self.sigma + b1)/ (self.sigma -1.029)
 
         self.m3 = np.clip(a2 * UUUU + b2, 0.016, 0.054)
+    
+    def calc_m4(self):
+        if self.TmL <= 0.028:
+            Sm4 = self.coeffs(self.TmL, -71.88, 4.238, -0.066)
+        elif 0.028 < self.TmL <= 0.04:
+            Sm4 = self.coeffs(self.TmL, -9.375, 0.8875, 0.0121)
+        else:
+            Sm4 = self.coeffs(self.TmL, -3.833, 0.415, -0.01117)
+        
+        if 0.55 <= self.kpc.cp <= 0.64:
+            U0 = self.coeffs(self.kpc.cp, -140.62, 180.62, 53.35)
+        elif 0.64 < self.kpc.cp <= 0.74:
+            U0 = self.coeffs(self.kpc.cp, -56.67, 75.1, -20.2)
+        else:
+            U0 = self.coeffs(self.kpc.cp, -216.7, 312.8, 108.51)
+        
+        if self.sigma <= 0.96:
+            Ss = self.coeffs(self.sigma, 1900, -3696, 1796)
+        elif self.sigma > 0.96:
+            Ss = self.coeffs(self.sigma, 391.7, -810.4, 415.8)
+        
+        UUUUU = U0 + Ss
+        Su = 0.00827 * UUUUU - 0.017
+
+        self.m4 = np.clip(Sm4 + Su, 0.03, 0.04)
+     
 
 
 if __name__ == "__main__":
