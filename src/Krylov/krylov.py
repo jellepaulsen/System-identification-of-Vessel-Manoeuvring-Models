@@ -345,13 +345,9 @@ class Krylov_forces(Krylov_pre_calc):
 
     def calc_cn_beta(self):
         beta = self.beta_eff
-        a1x = 0.075  # parameter for thew method alway set to 0.075 in Krylov paper
         self.cn_beta = self.m1*np.sin(2*beta)+self.m2*np.sin(beta)+self.m3*(np.sin(2*beta)**3) + self.m4 * (np.sin(2*beta)**5)
 
-        self.cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(self.cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"]))) 
-        # 
-
-        print(f"cxb: {self.cxb}")
+        self.cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(self.cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
     
     def calc_cn(self, x0):
         cn0 = 0.059*self.c2
