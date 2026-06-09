@@ -1,9 +1,12 @@
 # added mass (hydromass)
-eps: 10e-5 # error
+eps: 1.0e-5 # error
 R1_munk: 0.025      
 R2_munk: 0.96        
 R3_munk: 0.89        
 C :      1.0             # Lewis coefficient
+
+a1x: 0.075
+psix: 90
 
 
 
