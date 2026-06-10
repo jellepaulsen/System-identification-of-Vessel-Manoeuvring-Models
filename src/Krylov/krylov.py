@@ -89,15 +89,17 @@ class Krylov_forces(Krylov_pre_calc):
     def __init__(self, 
                  ship_parameters: dict, krylov_parameters: dict,
                  ship_resistance: pd.DataFrame = None,
+                 prop_openwater: pd.DataFrame = None,
                  data: pd.DataFrame = None, 
                 #  x0: np.array = None, 
-                 state_columns=["x0", "y0", "psi", "u", "v", "r"]
+                 state_columns: list =["x0", "y0", "psi", "u", "v", "r"],
+                 input_colums: list  = ["N0", "N1", "delta_r0", "delta_r1"]
                  ):
         super().__init__(ship_parameters, krylov_parameters)
-        self.data = data
-        self.state_columns = state_columns
+        self.states = data[state_columns]
+        self.input = data[input_colums]
         self.ship_resistance = ship_resistance
-
+        self.prop_openwater = prop_openwater
     @staticmethod
     def coeffs(value, a,b,c):
             return a*value**2 + b*value + c
@@ -110,7 +112,7 @@ class Krylov_forces(Krylov_pre_calc):
             if hasattr(self, "x0"):
                 self.x0 = x0
             else:
-                self.x0 = self.data.iloc[0][self.state_columns].values
+                self.x0 = self.data.iloc[0][self.state_columns].values()
 
         
         # adding wave induced velocities to 
@@ -118,6 +120,20 @@ class Krylov_forces(Krylov_pre_calc):
 
         
         self.eff_drift_angle(x0) # self.beta_eff
+
+    
+    #------------------------------------------------------
+    # wave induced velocities
+    def wave_induced_velocities(self, x0):
+        # need to be added
+        ucx = 0
+        ucy = 0
+        x0[3] = x0[3] + ucx 
+        x0[4] = x0[4] + ucy 
+        return x0
+
+    #------------------------------------------------------
+    # Krylov Force
 
     def krylov_force(self, x0= None, ta= None, tf= None):
         '''
@@ -370,6 +386,37 @@ class Krylov_forces(Krylov_pre_calc):
 
         self.cn = cnom +self.cn_beta*self.Uchar**2 # called cn_full
 
+    # End Krylov Force
+    #------------------------------------------------------
+
+    # Propeller Forces
+    def calc_propeller_forces(self, N: list, urx):
+        iks = 2.0 # meaning? 
+        sdelano = 0 # meaning?
+        Akt = self.data.iloc[0] # NOTE: Not proper defined yet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        T= [self.sp["nop"]]
+        if self.sp["noh"] == 1:
+            #Advance Ratio J
+            J = urx * (1- self.sp["w"])/ (N[0]* self.sp["D_p"])
+            print(f"NOT implemented yet!")
+            # to be coninued
+        elif self.sp["noh"] == 2:
+            for i, n in enumerate(N):
+                J = urx * (1- self.sp["w"])/ (n* self.sp["D_p"])
+                Kt = np.interp(J, self.prop_openwater["J"], self.prop_openwater["KT"])
+                T[i] = Kt * self.rho * (N[i]**2)*(self.sp["D_p"]**4)* np.where(N[i]>= 0, 1.0, -1.0)
+        # first version summation of all thrust, not suitable for Podthrusters wirth different angles
+        self.Thr = np.sum(T)
+
+    def calc_rudder_forces(self):
+        # changed from original kryov code: each pod gets its own delta_r and therefore the forces and moments differ 
+        if self.sp["Pod"] == 1:
+            cyvondr = 0.
+            cnvondr = 0.
+            for i, T in enumerate(self.Thr):
+                X_pod = T * np.cos()
+        
+
         
      
 
@@ -383,9 +430,13 @@ if __name__ == "__main__":
 
     with open("data/01_raw/wlfa/resistance_curve_HM.csv", "r") as f:
         ship_resistance = pd.read_csv(f)
+    
+    with open("data/01_raw/wlfa/freif.inp", "r") as f:
+        prop_openwater = pd.read_csv(f, sep='\s+', header=None, names=['J', 'KT', 'KQ'])
+    
 
     # kpc = Krylov_pre_calc(ship_parameters, krylov_parameters)
-    kf = Krylov_forces(ship_parameters, krylov_parameters, ship_resistance=ship_resistance)
+    kf = Krylov_forces(ship_parameters, krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater)
 
     kf.Fn = 0.50
     kf.xtg = -0.03
