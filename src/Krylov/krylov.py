@@ -57,17 +57,17 @@ class Krylov_pre_calc:
             print("Krylov code only implemented for monohulls and catamarans, not for trimarans or higher")
         
         elif self.sp["noh"] == 2:
-            qqq = -1.0 + self.dbh / self.B
+            qqq = -1.0 + self.sp["dbh"] / self.B
             Akxx = 2. + np.exp(-qqq)
             Akyy = 2. -0.8*np.exp(-2.*qqq)
             self.Corr_x=2.	
             self.Corr_y = 2.-0.5*np.exp(-2.*qqq)
             self.Corr_n=2.-0.65*np.exp(-2.*qqq)
-            m = self.sp["CB"]*self.rho*self.L*self.sp["B"]*self.T*2
-            volume = self.L*self.sp["B"]*self.T*self.sp["CB"]
+            m = self.sp["CB"]*self.rho*self.L*self.sp["B"]*self.Tm*2
+            volume = self.L*self.sp["B"]*self.Tm*self.sp["CB"]
             self.hydro_mass["m11"] = m11 * Akxx
             self.hydro_mass["m22"] = m22 * Akyy
-            self.hydro_mass["m66"] = Akyy*(m66+((self.dbh/2.0)**2)*m22)+Akxx*((self.dbh/2.0)**2)*m11 
+            self.hydro_mass["m66"] = Akyy*(m66+((self.sp["dbh"]/2.0)**2)*m22)+Akxx*((self.sp["dbh"]/2.0)**2)*m11 
             self.hydro_mass["izz"] = 11115 # fixed value for catamaran no idea about dimension 
         else: 
             volume = self.sp["CB"] * self.L * self.sp["B"] * self.Tm
@@ -411,10 +411,14 @@ class Krylov_forces(Krylov_pre_calc):
     def calc_rudder_forces(self):
         # changed from original kryov code: each pod gets its own delta_r and therefore the forces and moments differ 
         if self.sp["Pod"] == 1:
-            cyvondr = 0.
-            cnvondr = 0.
+            # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
             for i, T in enumerate(self.Thr):
-                X_pod = T * np.cos()
+                X_pod = T * np.cos(self.input[f"delta_r{i}"])
+                Y_pod = - T * np.sin(self.input[f"delta_r{i}"])
+                if self.sp["noh"] == 2:
+                    # moment arm
+                    h = np.sqrt((self.L/2)**2 + (self.sp["dbh"]/2)**2)*np.sin(self.input[f"delta_r{i}"] + np.arctan(self.sp["dbh"]/self.L))
+                    N_pod = T * h
         
 
         
@@ -436,12 +440,14 @@ if __name__ == "__main__":
     
 
     # kpc = Krylov_pre_calc(ship_parameters, krylov_parameters)
-    kf = Krylov_forces(ship_parameters, krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater)
+    # kf = Krylov_forces(ship_parameters, krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater)
 
-    kf.Fn = 0.50
-    kf.xtg = -0.03
-    kf.forces(x0 = [0,0,0,2,1,0])
-    kf.krylov_force(ta=0.45, tf=0.40)
-    kf.calc_sigma()
-    print(f"result: {kf.sigma}")
+    # kf.Fn = 0.50
+    # kf.xtg = -0.03
+    # kf.forces(x0 = [0,0,0,2,1,0])
+    # kf.krylov_force(ta=0.45, tf=0.40)
+    # kf.calc_sigma()
+    # print(f"result: {kf.sigma}")
+    h = np.sqrt((20/2)**2 + (4/2)**2)*np.sin(0+ np.arctan(4/20))
+    print(h)
 
