@@ -410,15 +410,26 @@ class Krylov_forces(Krylov_pre_calc):
 
     def calc_rudder_forces(self):
         # changed from original kryov code: each pod gets its own delta_r and therefore the forces and moments differ 
+        # NOTE!!: pod thrust is first assmued to be in the rotating center of the pod. Later the effects of another lever arm can be added 
+        # the pod forces are acting through the pod rotation center on the ship therefore no leverarm is assumed for either azipull or push thrusters
+        # this code only works with even numbers of pods which are symetrically arranged at the back of the ship
+        
+        
         if self.sp["Pod"] == 1:
             # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
+            X_pod, Y_pod, N_pod = 0, 0, 0
             for i, T in enumerate(self.Thr):
-                X_pod = T * np.cos(self.input[f"delta_r{i}"])
-                Y_pod = - T * np.sin(self.input[f"delta_r{i}"])
+                X_pod = X_pod +T * np.cos(self.input[f"delta_r{i}"])
+                Y_pod = Y_pod - T * np.sin(self.input[f"delta_r{i}"])
                 if self.sp["noh"] == 2:
-                    # moment arm
-                    h = np.sqrt((self.L/2)**2 + (self.sp["dbh"]/2)**2)*np.sin(self.input[f"delta_r{i}"] + np.arctan(self.sp["dbh"]/self.L))
-                    N_pod = T * h
+                    # moment arm separation according to prop location added by Jelle 
+                    dbh = {
+                        "stb": -self.sp["dbh"]/2, 
+                        "ps": self.sp["dbh"]/2
+                        }.get(self.sp["lop"][i], 0)
+                    
+                    h = np.sqrt((self.sp["lcg"])**2 + dbh**2)*np.sin(self.input[f"delta_r{i}"] + np.arctan(dbh/self.sp["lcg"]))
+                    N_pod = N_pod + T * h
         
 
         
@@ -440,14 +451,13 @@ if __name__ == "__main__":
     
 
     # kpc = Krylov_pre_calc(ship_parameters, krylov_parameters)
-    # kf = Krylov_forces(ship_parameters, krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater)
+    kf = Krylov_forces(ship_parameters, krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater)
 
-    # kf.Fn = 0.50
-    # kf.xtg = -0.03
-    # kf.forces(x0 = [0,0,0,2,1,0])
-    # kf.krylov_force(ta=0.45, tf=0.40)
-    # kf.calc_sigma()
-    # print(f"result: {kf.sigma}")
-    h = np.sqrt((20/2)**2 + (4/2)**2)*np.sin(0+ np.arctan(4/20))
-    print(h)
+    kf.Fn = 0.50
+    kf.xtg = -0.03
+    kf.forces(x0 = [0,0,0,2,1,0])
+    kf.krylov_force(ta=0.45, tf=0.40)
+    kf.calc_sigma()
+    print(f"result: {kf.sigma}")
+
 
