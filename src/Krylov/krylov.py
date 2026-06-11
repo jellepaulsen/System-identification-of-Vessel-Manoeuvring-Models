@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import pandas as pd
 import sympy as sp
 import yaml 
@@ -98,6 +99,8 @@ class Krylov_forces(Krylov_pre_calc):
         super().__init__(ship_parameters, krylov_parameters)
         self.states = data[state_columns]
         self.input = data[input_colums]
+        self.input_colums = input_colums
+        self.state_columns = state_columns
         self.ship_resistance = ship_resistance
         self.prop_openwater = prop_openwater
     @staticmethod
@@ -120,6 +123,9 @@ class Krylov_forces(Krylov_pre_calc):
 
         
         self.eff_drift_angle(x0) # self.beta_eff
+        self.wave_induced_velocities(x0)
+        self.krylov_force(x0)
+        self.calc_propeller_forces([self.input.iloc[0][self.input_colums][:1].values()], x0[3])
 
     
     #------------------------------------------------------
@@ -391,9 +397,6 @@ class Krylov_forces(Krylov_pre_calc):
 
     # Propeller Forces
     def calc_propeller_forces(self, N: list, urx):
-        iks = 2.0 # meaning? 
-        sdelano = 0 # meaning?
-        Akt = self.data.iloc[0] # NOTE: Not proper defined yet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         T= [self.sp["nop"]]
         if self.sp["noh"] == 1:
             #Advance Ratio J
@@ -406,9 +409,9 @@ class Krylov_forces(Krylov_pre_calc):
                 Kt = np.interp(J, self.prop_openwater["J"], self.prop_openwater["KT"])
                 T[i] = Kt * self.rho * (N[i]**2)*(self.sp["D_p"]**4)* np.where(N[i]>= 0, 1.0, -1.0)
         # first version summation of all thrust, not suitable for Podthrusters wirth different angles
-        self.Thr = np.sum(T)
+        self.Thr = T
 
-    def calc_rudder_forces(self):
+    def calc_pod_forces(self):
         # changed from original kryov code: each pod gets its own delta_r and therefore the forces and moments differ 
         # NOTE!!: pod thrust is first assmued to be in the rotating center of the pod. Later the effects of another lever arm can be added 
         # the pod forces are acting through the pod rotation center on the ship therefore no leverarm is assumed for either azipull or push thrusters
@@ -419,17 +422,101 @@ class Krylov_forces(Krylov_pre_calc):
             # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
             X_pod, Y_pod, N_pod = 0, 0, 0
             for i, T in enumerate(self.Thr):
-                X_pod = X_pod +T * np.cos(self.input[f"delta_r{i}"])
-                Y_pod = Y_pod - T * np.sin(self.input[f"delta_r{i}"])
+                X_pod = X_pod +T * math.cos(self.input[f"delta_r{i}"])
+                Y_pod = Y_pod - T * math.sin(self.input[f"delta_r{i}"])
                 if self.sp["noh"] == 2:
                     # moment arm separation according to prop location added by Jelle 
-                    dbh = {
-                        "stb": -self.sp["dbh"]/2, 
-                        "ps": self.sp["dbh"]/2
+                    dbh2 = {
+                        "stb": self.sp["dbh"]/2, 
+                        "ps": -self.sp["dbh"]/2
                         }.get(self.sp["lop"][i], 0)
                     
-                    h = np.sqrt((self.sp["lcg"])**2 + dbh**2)*np.sin(self.input[f"delta_r{i}"] + np.arctan(dbh/self.sp["lcg"]))
+                    h = np.sqrt((self.sp["lcg"])**2 + dbh2**2)*math.sin(self.input[f"delta_r{i}"] + math.atan(dbh2/self.sp["lcg"]))
                     N_pod = N_pod + T * h
+            else:
+                print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
+                X_pod, Y_pod, N_pod = 0, 0, 0
+
+            self.calc_rudder_forces = [X_pod, Y_pod, N_pod]
+
+        def calc_windforces(self):
+            # to be implemented
+            pass
+        
+
+#--------------------------------------------------
+# test written by copilot to check the rudder force calculation in isolation from the rest of the code.
+
+# RESULT: new code shows same results for all tested forces and moments. 
+def calc_rudder_forces_direct(sp: dict, Thr, deltas, lop):
+    """Standalone test implementation of pod/pod-thruster forces.
+
+    Args:
+        sp: ship parameters dict, requires keys `lcg`, `dbh`, and `noh` (optional)
+        Thr: iterable of thrust magnitudes
+        deltas: iterable of same length with deflection angles (radians)
+        lop: list or single value indicating side per propeller ('stb' or 'ps')
+
+    Returns:
+        (X_pod, Y_pod, N_pod)
+    """
+    
+
+    X_pod = 0.0
+    Y_pod = 0.0
+    N_pod = 0.0
+
+    for i, T in enumerate(Thr):
+        delta = deltas[i]
+        X_pod += T * math.cos(delta)
+        Y_pod -= T * math.sin(delta)
+
+        if sp.get("noh", 1) == 2:
+            lop_i = lop[i] if isinstance(lop, (list, tuple)) else lop
+            dbh2 = {"stb": sp["dbh"]/2, "ps": -sp["dbh"]/2}.get(lop_i, 0)
+            # clearer linear form for h (equivalent to the rotated-vector form):
+            h = np.sqrt((sp["lcg"])**2 + dbh2**2)*math.sin(deltas[i] + math.atan(dbh2/sp["lcg"]))
+            N_pod += T * h
+
+    return X_pod, Y_pod, N_pod
+
+def krylov_rudder_forces(sp: dict, Thr, deltas, lop):
+    X_pod = 0.0
+    Y_pod = 0.0
+    N_pod = 0.0
+
+    T_gesamt = sum(Thr)
+    delta = deltas[0]
+    X_pod += T_gesamt * math.cos(delta)
+    Y_pod -= T_gesamt * math.sin(delta)
+
+    if sp.get("noh", 1) == 2:
+        dbh2 = sp["dbh"]/2
+        # clearer linear form for h (equivalent to the rotated-vector form):
+        h = np.sqrt((sp["lcg"])**2 + dbh2**2)*math.sin(deltas[0] - math.atan(dbh2/sp["lcg"]))
+        N_pod = T_gesamt * h + (T_gesamt/2)* dbh2*2 * math.cos(delta)
+
+    return X_pod, Y_pod, N_pod
+
+def test_calc_rudder_forces_direct():
+    """Simple test harness that passes all inputs directly and prints result."""
+    import math
+
+    sp = {"lcg": 10.0, "dbh": 4.0, "noh": 2}
+    Thr = [100.0, 100.0]
+    deltas = [math.radians(100), math.radians(100)]
+    lop = ["ps", "stb"]
+
+    X, Y, N = calc_rudder_forces_direct(sp, Thr, deltas, lop)
+    Xk, Yk, Nk = krylov_rudder_forces(sp, Thr, deltas, lop)
+
+    x_err, y_err, n_err = Xk - X, Yk - Y, Nk - N
+    print(f"Direct calc: X={X:.2f}, Y={Y:.2f}, N={N:.2f}")
+    print(f"Krylov calc: X={Xk:.2f}, Y={Yk:.2f}, N={Nk:.2f}")   
+    print(f"Errors: ΔX={x_err:.2f}, ΔY={y_err:.2f}, ΔN={n_err:.2f}")
+    # print("test_calc_rudder_forces_direct ->", X, Y, N)
+    return 
+        
         
 
         
@@ -448,16 +535,19 @@ if __name__ == "__main__":
     
     with open("data/01_raw/wlfa/freif.inp", "r") as f:
         prop_openwater = pd.read_csv(f, sep='\s+', header=None, names=['J', 'KT', 'KQ'])
-    
+
+
+    test_calc_rudder_forces_direct()
+
 
     # kpc = Krylov_pre_calc(ship_parameters, krylov_parameters)
-    kf = Krylov_forces(ship_parameters, krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater)
+    # kf = Krylov_forces(ship_parameters, krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater)
 
-    kf.Fn = 0.50
-    kf.xtg = -0.03
-    kf.forces(x0 = [0,0,0,2,1,0])
-    kf.krylov_force(ta=0.45, tf=0.40)
-    kf.calc_sigma()
-    print(f"result: {kf.sigma}")
+    # kf.Fn = 0.50
+    # kf.xtg = -0.03
+    # kf.forces(x0 = [0,0,0,2,1,0])
+    # kf.krylov_force(ta=0.45, tf=0.40)
+    # kf.calc_sigma()
+    # print(f"result: {kf.sigma}")
 
 
