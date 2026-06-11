@@ -126,6 +126,8 @@ class Krylov_forces(Krylov_pre_calc):
         self.wave_induced_velocities(x0)
         self.krylov_force(x0)
         self.calc_propeller_forces([self.input.iloc[0][self.input_colums][:1].values()], x0[3])
+        self.calc_pod_forces()
+
 
     
     #------------------------------------------------------
@@ -162,17 +164,14 @@ class Krylov_forces(Krylov_pre_calc):
         self.xtg = self.sp['x_G']/self.L
         self.psi1 = (ta - tf) / self.L # tangent ot static trim angle
 
-        self.get_cx0()
-        self.eff_drift_angle(x0) # self.beta_eff
+        cx0 = self.get_cx0()
+        beta_eff, beta_eff_sign = self.eff_drift_angle(x0) # self.beta_eff
         self.calc_psi2()
         self.calc_sigma()
         self.calc_c2()
         self.calc_c3()
         self.calc_cy_beta()
-        self.calc_m1()
-        self.calc_m2()
-        self.calc_m3()
-        self.calc_m4()
+        self.calc_ms()
         self.calc_cn_beta()
         self.calc_cn(x0)
 
@@ -194,21 +193,24 @@ class Krylov_forces(Krylov_pre_calc):
         RTx0 = np.interp(self.Uchar, self.ship_resistance["kn"]*0.5144 , self.ship_resistance["kN"])
 
         # NOTE: For catamaran the wetted area of demi hull is used!!! Whereas RT is for the whole ship!!
-        self.cx0 = RTx0 / (0.5 * self.rho * self.Uchar**2 * self.sp["S"]) 
+        return RTx0 / (0.5 * self.rho * self.Uchar**2 * self.sp["S"]) 
 
     def eff_drift_angle(self, x0):
         if x0[4] >= self.eps:
-            self.beta_eff = np.arctan(x0[4]/x0[3])
+            beta_eff = np.arctan(x0[4]/x0[3])
         else:
-            self.beta_eff = np.pi/2 * np.sign(x0[4])
+            beta_eff = np.pi/2 * np.where(x0[4]>0, 1, -1)
 
         if x0[5] < 0.0:
-            self.beta_eff = np.pi* np.sign(self.beta_eff)
+            beta_eff = np.pi* np.where(beta_eff>0, 1, -1)
 
-        self.beta_eff_sign = np.sign(self.beta_eff)
+            beta_eff_sign = np.where(beta_eff>0, 1, -1)
+        return beta_eff, beta_eff_sign
 
-    def calc_psi2(self):
-        psi2p = self.psi2p
+
+
+    def calc_psi2(self, psi2p):
+        check = 0
         for fnr in psi2p.values():                      # fnr = Fn range
             if fnr["fn"][0] <= self.Fn <= fnr["fn"][1]:
                 print(f"fnr: {fnr.keys()}")
@@ -217,168 +219,184 @@ class Krylov_forces(Krylov_pre_calc):
                         a1 = self.coeffs(self.xtg, *xgr["a1"])
                         b1 = self.coeffs(self.xtg, *xgr["b1"])
                         c1 = self.coeffs(self.xtg, *xgr["c1"])
-                        self.psi2 = self.coeffs(self.Fn, a1, b1, c1)
+                        check += 1
+        if check == 1:
+            psi2 = self.coeffs(self.Fn, a1, b1, c1)
+            return psi2
+        else:
+            print(f"Fn: {self.Fn}, xtg: {self.xtg}, check: {check}")
+            print("Fn or xg out of range for psi2 calculation")
+            print("If check > 1 then multiple ranges are overlapping CODE INCORRECT")
+            return 0.0
 
 
-    def calc_sigma(self):
-        self.TmL = self.Tm / self.L
-        askeg = self.askeg
-        psi_res = self.psi1 + self.psi2
+    def calc_sigma(self,psi1, psi2, Tm, L, askeg):
+        TmL = Tm/L
+        psi_res = psi1 + psi2
         if self.sp["shiptype"] == 1:
-            self.sigma = 1.-(3./(20.-self.sp["fr_i"]))*(askeg/(self.L*self.Tm))+(0.054/(self.TmL)) * psi_res
+            sigma = 1.-(3./(20.-self.sp["fr_i"]))*(askeg/(L*Tm))+(0.054/(TmL)) * psi_res
         elif self.sp["shiptype"] == 2:
-            self.sigma = 0.975 + 0.054/self.TmL * psi_res
+            sigma = 0.975 + 0.054/self.TmL * psi_res
         elif self.sp["shiptype"] == 3:
-            self.sigma = 0.962 + 0.054/ self.TmL * psi_res
+            sigma = 0.962 + 0.054/ self.TmL * psi_res
         
         # lower limit
-        if self.sigma <= 0.93:
-            self.sigma = 0.93 
+        if sigma <= 0.93:
+            sigma = 0.93 
         
         # lateral area A_{L sigma}
-        self.Asigma = self.L * self.Tm * self.sigma 
+        Asigma = self.L * self.Tm * self.sigma 
+        return sigma, Asigma
 
-    def calc_c2(self):    
-        for tml in self.c2p.values():
+    def calc_c2(self, L, B, TmL, c2p, x0):    
+        for tml in c2p.values():
             if "tml" in tml.keys():
-                if tml["tml"][0] <= self.TmL <= tml["tml"][1]:
-                    a3 = self.coeffs(self.TmL, *tml["a3"])
-                    b3 = self.coeffs(self.TmL, *tml["b3"])
+                if tml["tml"][0] <= TmL <= tml["tml"][1]:
+                    a3 = self.coeffs(TmL, *tml["a3"])
+                    b3 = self.coeffs(TmL, *tml["b3"])
         
         a1 = 54.46*self.cp - 59.43
         b1 = -31.44*self.cp + 46.8
 
         U = a1 * self.sigma + b1
 
-        for U in self.c2p["U"].values():
-            if U["r"][0] <= self.x0[3] <= U["r"][1]:
-                a2 = self.coeffs(self.x0[3], *U["a2"])
-                b2 = self.coeffs(self.x0[3], *U["b2"])
+        for U in c2p["U"].values():
+            if U["r"][0] <= x0[3] <= U["r"][1]:
+                a2 = self.coeffs(x0[3], *U["a2"])
+                b2 = self.coeffs(x0[3], *U["b2"])
         
-        Q = a2 * (self.L/ self.B) + b2
-        self.c2 = np.clip(a3 * Q + b3, 0.3, 1.6)
+        Q = a2 * (L/ B) + b2
+        c2 = np.clip(a3 * Q + b3, 0.3, 1.6)
 
-    def calc_c3(self):
-        a2 = self.coeffs(self.TmL, 2.269, -0.5805, 0.00183)
-        b2 = self.coeffs(self.TmL, -27.7, 6.428, -0.01749)
+        return c2
 
-        if self.cp <= 0.72:
-            a1 = self.coeffs(self.cp, 24.65, -29.67, 7.547)
-        elif self.cp > 0.72:
-            a1 = self.coeffs(self.cp, 0, 5.917, 5.3)
+    def calc_c3(self, LB, TmL, cp):
+        a2 = self.coeffs(TmL, 2.269, -0.5805, 0.00183)
+        b2 = self.coeffs(TmL, -27.7, 6.428, -0.01749)
 
-        if self.cp <= 0.68:
-            b1 = self.coeffs(self.cp, -60.44, 74.61, 9.255)
-        elif self.cp > 0.68:
-            b1 = self.coeffs(self.cp, 0, 10.08, 20.34)
+        if cp <= 0.72:
+            a1 = self.coeffs(cp, 24.65, -29.67, 7.547)
+        elif cp > 0.72:
+            a1 = self.coeffs(cp, 0, 5.917, 5.3)
 
-        U = a1 * self.LB + b1
-        self.c3 = np.clip(a2 * U + b2, 0.0, 0.35)
+        if cp <= 0.68:
+            b1 = self.coeffs(cp, -60.44, 74.61, 9.255)
+        elif cp > 0.68:
+            b1 = self.coeffs(cp, 0, 10.08, 20.34)
 
-    def calc_cy_beta(self):
+        U = a1 * LB + b1
+        c3 = np.clip(a2 * U + b2, 0.0, 0.35)
+
+        return c3
+
+    def calc_cy_beta(self, LB, TmL, cp, beta_eff, beta_eff_sign):
         for lb in self.cy_betap.values():
-            if lb["r"][0] <= self.LB <= lb["r"][1]:
+            if lb["r"][0] <= LB <= lb["r"][1]:
                 for sigma in lb["sigma"].values():
                     if sigma["r"][0] is None and sigma["r"][1] is None:
                         print()
-                        a1 = self.coeffs(self.LB, *sigma["a1"])
-                        b1 = self.coeffs(self.LB, *sigma["b1"])
+                        a1 = self.coeffs(LB, *sigma["a1"])
+                        b1 = self.coeffs(LB, *sigma["b1"])
                     elif sigma["r"][0] <= self.sigma <= sigma["r"][1]:
-                        a1 = self.coeffs(self.LB, *sigma["a1"])
-                        b1 = self.coeffs(self.LB, *sigma["b1"])
+                        a1 = self.coeffs(LB, *sigma["a1"])
+                        b1 = self.coeffs(LB, *sigma["b1"])
 
-        a2 = self.coeffs(self.TmL, 16.67, -11.92, 0.06)
-        b2 = self.coeffs(self.TmL, 261.1, 213.6, 2.468)
+        a2 = self.coeffs(TmL, 16.67, -11.92, 0.06)
+        b2 = self.coeffs(TmL, 261.1, 213.6, 2.468)
 
-        a3 = self.coeffs(self.cp, 0.2392, -0.4009, 0.1815)
-        b3 = self.coeffs(self.cp, 0.4033, -0.6965, 0.3263)
+        a3 = self.coeffs(cp, 0.2392, -0.4009, 0.1815)
+        b3 = self.coeffs(cp, 0.4033, -0.6965, 0.3263)
 
-        U = a1 * self.LB + b1
+        U = a1 * LB + b1
         Q = a2 * U + b2
 
         cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 0.5)
-        self.cy_beta = 0.5* cy_beta_2 * np.sin(2.* self.beta_eff)* np.cos(self.beta_eff) + (self.c2*(np.sin(self.beta_eff)**2))+ self.c3*(np.sin(2*self.beta_eff)**4)* self.beta_eff_sign
+        cy_beta = 0.5* cy_beta_2 * np.sin(2.* beta_eff)* np.cos(beta_eff) + (self.c2*(np.sin(beta_eff)**2))+ self.c3*(np.sin(2*beta_eff)**4)* beta_eff_sign
+        return cy_beta
 
 
+    def calc_ms(self, TmL, sigma, LB, cp):
+        # ----m1------
+        a1 = self.coeffs(TmL, -0.1317, 0.05358, 0.000181)
+        b1 = self.coeffs(TmL, -2.361, 0.8653, -0.000161)
 
-    def calc_m1(self):
-        a1 = self.coeffs(self.TmL, -0.1317, 0.05358, 0.000181)
-        b1 = self.coeffs(self.TmL, -2.361, 0.8653, -0.000161)
-
-        if self.cp <= 0.72:
-            U0 = self.coeffs(self.sigma, -235, 474.2, 235.8)
-            SCP = self.coeffs(self.cp, -74.67, 110.9, -39.64)
-        elif self.cp > 0.72:
-            U0 = self.coeffs(self.sigma, -210, 422.9, 207.2)
-            SCP = self.coeffs(self.cp, 12, -8.8, -0.64)
+        if cp <= 0.72:
+            U0 = self.coeffs(sigma, -235, 474.2, 235.8)
+            SCP = self.coeffs(cp, -74.67, 110.9, -39.64)
+        elif cp > 0.72:
+            U0 = self.coeffs(sigma, -210, 422.9, 207.2)
+            SCP = self.coeffs(cp, 12, -8.8, -0.64)
         
         UUU = U0 + SCP
 
         if UUU >= 4:
             Su = -1.3 * UUU + 7.8
-            Sv0 = self.coeffs(self.LB, 0.02333, -0.045, 1.187)
+            Sv0 = self.coeffs(LB, 0.02333, -0.045, 1.187)
         else:
             Su = -1.3 * UUU + 2.6
-            Sv0 = self.coeffs(self.LB, 0.02333, -0.045, 1.187) + 0.01 * UUU 
+            Sv0 = self.coeffs(LB, 0.02333, -0.045, 1.187) + 0.01 * UUU 
 
         S = Su + Sv0
-        self.m1 = np.clip(a1 * S + b1,0.02, 0.08)
-    
-    def calc_m2(self):
-        self.m2 = np.maximum(-(np.log(1.023 * self.sigma))/ (11.6* self.sigma -9.29), -0.01)
-         
-    def calc_m3(self):
+        m1 = np.clip(a1 * S + b1,0.02, 0.08)
+
+        # ----m2------
+        m2 = np.maximum(-(np.log(1.023 * sigma))/ (11.6* sigma -9.29), -0.01)
+
+        # ----m3------ 
         self.sigma = np.maximum(self.sigma, 1)
 
-        a1 = 31.26 -9.0146 * np.exp(0.066947* self.LB)
-        b1 = 8.6245 * np.exp(0.071419* self.LB) - 32.26
+        a1 = 31.26 -9.0146 * np.exp(0.066947* LB)
+        b1 = 8.6245 * np.exp(0.071419* LB) - 32.26
 
-        a2 = (np.exp(8.20939* self.cp)* 0.7728*0.001-1.873)*0.001
-        b2 = (np.exp(7.47893* self.cp)*0.4404 * 0.01+5.709)*0.01
+        a2 = (np.exp(8.20939* cp)* 0.7728*0.001-1.873)*0.001
+        b2 = (np.exp(7.47893* cp)*0.4404 * 0.01+5.709)*0.01
 
         UUUU = (a1 * self.sigma + b1)/ (self.sigma -1.029)
 
-        self.m3 = np.clip(a2 * UUUU + b2, 0.016, 0.054)
+        m3 = np.clip(a2 * UUUU + b2, 0.016, 0.054)
     
-    def calc_m4(self):
-        if self.TmL <= 0.028:
-            Sm4 = self.coeffs(self.TmL, -71.88, 4.238, -0.066)
-        elif 0.028 < self.TmL <= 0.04:
-            Sm4 = self.coeffs(self.TmL, -9.375, 0.8875, 0.0121)
+        # ----m4------
+        if TmL <= 0.028:
+            Sm4 = self.coeffs(TmL, -71.88, 4.238, -0.066)
+        elif 0.028 < TmL <= 0.04:
+            Sm4 = self.coeffs(TmL, -9.375, 0.8875, 0.0121)
         else:
-            Sm4 = self.coeffs(self.TmL, -3.833, 0.415, -0.01117)
+            Sm4 = self.coeffs(TmL, -3.833, 0.415, -0.01117)
         
-        if 0.55 <= self.cp <= 0.64:
-            U0 = self.coeffs(self.cp, -140.62, 180.62, 53.35)
-        elif 0.64 < self.cp <= 0.74:
-            U0 = self.coeffs(self.cp, -56.67, 75.1, -20.2)
+        if 0.55 <= cp <= 0.64:
+            U0 = self.coeffs(cp, -140.62, 180.62, 53.35)
+        elif 0.64 < cp <= 0.74:
+            U0 = self.coeffs(cp, -56.67, 75.1, -20.2)
         else:
-            U0 = self.coeffs(self.cp, -216.7, 312.8, 108.51)
+            U0 = self.coeffs(cp, -216.7, 312.8, 108.51)
         
-        if self.sigma <= 0.96:
-            Ss = self.coeffs(self.sigma, 1900, -3696, 1796)
-        elif self.sigma > 0.96:
-            Ss = self.coeffs(self.sigma, 391.7, -810.4, 415.8)
+        if sigma <= 0.96:
+            Ss = self.coeffs(sigma, 1900, -3696, 1796)
+        elif sigma > 0.96:
+            Ss = self.coeffs(sigma, 391.7, -810.4, 415.8)
         
         UUUUU = U0 + Ss
         Su = 0.00827 * UUUUU - 0.017
 
-        self.m4 = np.clip(Sm4 + Su, 0.03, 0.04)
+        m4 = np.clip(Sm4 + Su, 0.03, 0.04)
 
-    def calc_cn_beta(self):
-        beta = self.beta_eff
-        self.cn_beta = self.m1*np.sin(2*beta)+self.m2*np.sin(beta)+self.m3*(np.sin(2*beta)**3) + self.m4 * (np.sin(2*beta)**5)
+        return [m1, m2, m3, m4]
 
-        self.cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(self.cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
+    def calc_cn_beta(self, cx0, beta_eff, m):
+        beta = beta_eff
+        cn_beta = m[0]*np.sin(2*beta)+m[1]*np.sin(beta)+m[2]*(np.sin(2*beta)**3) + m[3] * (np.sin(2*beta)**5)
+
+        cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
+        return cn_beta, cxb
     
-    def calc_cn(self, x0):
-        cn0 = 0.059*self.c2
-        cnw2= (0.739 +8.7 * self.TmL)*(1.611*(self.sigma**2)-2.873*self.sigma+1.33)
+    def calc_cn(self, c2, cn_beta, beta_eff, Tml, sigma, LB):
+        cn0 = 0.059*c2
+        cnw2= (0.739 +8.7 * Tml)*(1.611*(sigma**2)-2.873*sigma+1.33)
 
-        a1 = 0.09-cnw2 - 0.0033*(self.LB -7)-20*((self.TmL-0.005)**2)+ 0.4*(self.sigma-0.9)+ 0.05*(self.sp["CM"]-0.9)
-        a2 = 0.008*self.LB + 0.9 *(self.TmL -0.05) + 0.45*(self.sigma-0.955)
+        a1 = 0.09-cnw2 - 0.0033*(LB -7)-20*((Tml-0.005)**2)+ 0.4*(sigma-0.9)+ 0.05*(self.sp["CM"]-0.9)
+        a2 = 0.008*LB + 0.9 *(Tml -0.05) + 0.45*(sigma-0.955)
 
-        cnw = cnw2 + a1 *abs(np.sin(self.beta_eff))+ a2 * (1-np.cos( (2*np.pi-4*abs(self.beta_eff))*np.cos(self.beta_eff)+0.1*abs(np.sin(2*self.beta_eff))))
+        cnw = cnw2 + a1 *abs(np.sin(beta_eff))+ a2 * (1-np.cos( (2*np.pi-4*abs(beta_eff))*np.cos(beta_eff)+0.1*abs(np.sin(2*beta_eff))))
 
         # omega is rate of turn
 
@@ -390,28 +408,30 @@ class Krylov_forces(Krylov_pre_calc):
 
         cnom = -cn0*abs(self.x0[5])* self.x0[5]*self.L**2 - cnw/ np.pi*(self.Uchar**2 +(self.x0[5]**2)*self.L**2)* np.sin(np.pi*omega_large)
 
-        self.cn = cnom +self.cn_beta*self.Uchar**2 # called cn_full
+        self.cn = cnom +cn_beta*self.Uchar**2 # called cn_full
 
     # End Krylov Force
     #------------------------------------------------------
 
     # Propeller Forces
-    def calc_propeller_forces(self, N: list, urx):
-        T= [self.sp["nop"]]
+    def calc_propeller_forces(self, N: list, urx, w, D_p, prop_openwater: pd.DataFrame, Thr: list):
+        # in init
+        T= [len(self.sp["nop"])]
+        # ------
         if self.sp["noh"] == 1:
             #Advance Ratio J
-            J = urx * (1- self.sp["w"])/ (N[0]* self.sp["D_p"])
+            J = urx * (1- w)/ (N[0]* D_p)
             print(f"NOT implemented yet!")
             # to be coninued
         elif self.sp["noh"] == 2:
             for i, n in enumerate(N):
-                J = urx * (1- self.sp["w"])/ (n* self.sp["D_p"])
-                Kt = np.interp(J, self.prop_openwater["J"], self.prop_openwater["KT"])
-                T[i] = Kt * self.rho * (N[i]**2)*(self.sp["D_p"]**4)* np.where(N[i]>= 0, 1.0, -1.0)
+                J = urx * (1- w)/ (n* D_p)
+                Kt = np.interp(J, prop_openwater["J"], prop_openwater["KT"])
+                T[i] = Kt * self.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
         # first version summation of all thrust, not suitable for Podthrusters wirth different angles
-        self.Thr = T
+        return T
 
-    def calc_pod_forces(self):
+    def calc_pod_forces(self, input: pd.DataFrame, Thr: list, dbh, lop, lcg):
         # changed from original kryov code: each pod gets its own delta_r and therefore the forces and moments differ 
         # NOTE!!: pod thrust is first assmued to be in the rotating center of the pod. Later the effects of another lever arm can be added 
         # the pod forces are acting through the pod rotation center on the ship therefore no leverarm is assumed for either azipull or push thrusters
@@ -421,27 +441,27 @@ class Krylov_forces(Krylov_pre_calc):
         if self.sp["Pod"] == 1:
             # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
             X_pod, Y_pod, N_pod = 0, 0, 0
-            for i, T in enumerate(self.Thr):
-                X_pod = X_pod +T * math.cos(self.input[f"delta_r{i}"])
-                Y_pod = Y_pod - T * math.sin(self.input[f"delta_r{i}"])
+            for i, T in enumerate(Thr):
+                X_pod = X_pod +T * math.cos(input[f"delta_r{i}"])
+                Y_pod = Y_pod - T * math.sin(input[f"delta_r{i}"])
                 if self.sp["noh"] == 2:
                     # moment arm separation according to prop location added by Jelle 
                     dbh2 = {
-                        "stb": self.sp["dbh"]/2, 
-                        "ps": -self.sp["dbh"]/2
-                        }.get(self.sp["lop"][i], 0)
+                        "stb": dbh/2, 
+                        "ps": -dbh/2
+                        }.get(lop[i], 0)
                     
-                    h = np.sqrt((self.sp["lcg"])**2 + dbh2**2)*math.sin(self.input[f"delta_r{i}"] + math.atan(dbh2/self.sp["lcg"]))
+                    h = np.sqrt((lcg)**2 + dbh2**2)*math.sin(input[f"delta_r{i}"] + math.atan(dbh2/lcg))
                     N_pod = N_pod + T * h
             else:
                 print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
                 X_pod, Y_pod, N_pod = 0, 0, 0
 
-            self.calc_rudder_forces = [X_pod, Y_pod, N_pod]
+            return [X_pod, Y_pod, N_pod]
 
-        def calc_windforces(self):
-            # to be implemented
-            pass
+    def calc_windforces(self):
+        # to be implemented
+        pass
         
 
 #--------------------------------------------------
