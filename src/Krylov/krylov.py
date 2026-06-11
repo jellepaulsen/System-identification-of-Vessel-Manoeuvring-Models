@@ -4,6 +4,14 @@ import pandas as pd
 import sympy as sp
 import yaml 
 
+def calc_helper():
+    pass
+
+def coeffs(value, a,b,c):
+    return a*value**2 + b*value + c
+
+
+
 
 
 class Krylov_pre_calc:    
@@ -28,6 +36,7 @@ class Krylov_pre_calc:
         self.xtg = self.sp['x_G']/self.L
         self.askeg = self.scale_dim2D(self.sp["askeg"])
         self.LB = self.L / self.B
+        self.TmL = self.Tm / self.L
         if self.LB > 11:
             print("Krylov code only implemented for ships with L/B ratio less than 11")
             return
@@ -96,6 +105,7 @@ class Krylov_forces(Krylov_pre_calc):
                  state_columns: list =["x0", "y0", "psi", "u", "v", "r"],
                  input_colums: list  = ["N0", "N1", "delta_r0", "delta_r1"]
                  ):
+        
         super().__init__(ship_parameters, krylov_parameters)
         self.states = data[state_columns]
         self.input = data[input_colums]
@@ -103,19 +113,16 @@ class Krylov_forces(Krylov_pre_calc):
         self.state_columns = state_columns
         self.ship_resistance = ship_resistance
         self.prop_openwater = prop_openwater
-    @staticmethod
-    def coeffs(value, a,b,c):
-            return a*value**2 + b*value + c
 
-    def forces(self, x0 = None):
-        self.x0 = x0
+    def forces(self,
+                x0 = None,
+                input = None,
+                input_colums = None
+                ):
         # adding force equations to be simpified and lambdified with sympy
         # If None take value from object:
         if x0 is None:
-            if hasattr(self, "x0"):
-                self.x0 = x0
-            else:
-                self.x0 = self.data.iloc[0][self.state_columns].values()
+            x0 = self.data.iloc[0][self.state_columns].values()
 
         
         # adding wave induced velocities to 
@@ -125,7 +132,7 @@ class Krylov_forces(Krylov_pre_calc):
         self.eff_drift_angle(x0) # self.beta_eff
         self.wave_induced_velocities(x0)
         self.krylov_force(x0)
-        self.calc_propeller_forces([self.input.iloc[0][self.input_colums][:1].values()], x0[3])
+        self.calc_propeller_forces([input.iloc[0][input_colums][:1].values()], x0[3])
         self.calc_pod_forces()
 
 
@@ -143,7 +150,7 @@ class Krylov_forces(Krylov_pre_calc):
     #------------------------------------------------------
     # Krylov Force
 
-    def krylov_force(self, x0= None, ta= None, tf= None):
+    def krylov_force(self, x0= None, ta= None, tf= None, L= None, Tm= None):
         '''
         ta = t aft
         tf = t fore
@@ -154,17 +161,23 @@ class Krylov_forces(Krylov_pre_calc):
             x0 = self.x0
         # If no initial values for ta and tf, take mean draft as inital value for both
         if ta is None or tf is None:
-            ta, tf = self.Tm, self.Tm 
+            ta, tf = Tm, Tm 
             # später kann es auch aus dem mittleren Tiefgang und dem Trim aus dem IMU berechnet werden zu Fahrtantritt
 
 
-        self.Uchar = np.sqrt(x0[3]**2 + x0[4]**2) # speed
-        self.Fn = self.Uchar / np.sqrt(self.L * 9.81) # Froude number
+        Uchar = np.sqrt(x0[3]**2 + x0[4]**2) # speed
+        Fn = Uchar / np.sqrt(L * 9.81) # Froude number
 
-        self.xtg = self.sp['x_G']/self.L
-        self.psi1 = (ta - tf) / self.L # tangent ot static trim angle
+        self.xtg = self.sp['x_G']/L
+        self.psi1 = (ta - tf) /L # tangent ot static trim angle
+
+
 
         cx0 = self.get_cx0()
+
+
+
+
         beta_eff, beta_eff_sign = self.eff_drift_angle(x0) # self.beta_eff
         self.calc_psi2()
         self.calc_sigma()
@@ -187,13 +200,13 @@ class Krylov_forces(Krylov_pre_calc):
 
         )
         
-    def get_cx0(self):
+    def get_cx0(self, ship_resistance = None, Uchar = None):
         # interpolate zerodrift resistance from resistance curve
         
-        RTx0 = np.interp(self.Uchar, self.ship_resistance["kn"]*0.5144 , self.ship_resistance["kN"])
+        RTx0 = np.interp(Uchar, ship_resistance["kn"]*0.5144 , ship_resistance["kN"])
 
         # NOTE: For catamaran the wetted area of demi hull is used!!! Whereas RT is for the whole ship!!
-        return RTx0 / (0.5 * self.rho * self.Uchar**2 * self.sp["S"]) 
+        return RTx0 / (0.5 * self.rho * Uchar**2 * self.sp["S"]) 
 
     def eff_drift_angle(self, x0):
         if x0[4] >= self.eps:
@@ -216,12 +229,12 @@ class Krylov_forces(Krylov_pre_calc):
                 print(f"fnr: {fnr.keys()}")
                 for xgr in fnr["xg"].values():
                     if xgr["r"][0] <= self.xtg <= xgr["r"][1]:
-                        a1 = self.coeffs(self.xtg, *xgr["a1"])
-                        b1 = self.coeffs(self.xtg, *xgr["b1"])
-                        c1 = self.coeffs(self.xtg, *xgr["c1"])
+                        a1 = coeffs(self.xtg, *xgr["a1"])
+                        b1 = coeffs(self.xtg, *xgr["b1"])
+                        c1 = coeffs(self.xtg, *xgr["c1"])
                         check += 1
         if check == 1:
-            psi2 = self.coeffs(self.Fn, a1, b1, c1)
+            psi2 = coeffs(self.Fn, a1, b1, c1)
             return psi2
         else:
             print(f"Fn: {self.Fn}, xtg: {self.xtg}, check: {check}")
@@ -252,8 +265,8 @@ class Krylov_forces(Krylov_pre_calc):
         for tml in c2p.values():
             if "tml" in tml.keys():
                 if tml["tml"][0] <= TmL <= tml["tml"][1]:
-                    a3 = self.coeffs(TmL, *tml["a3"])
-                    b3 = self.coeffs(TmL, *tml["b3"])
+                    a3 = coeffs(TmL, *tml["a3"])
+                    b3 = coeffs(TmL, *tml["b3"])
         
         a1 = 54.46*self.cp - 59.43
         b1 = -31.44*self.cp + 46.8
@@ -262,27 +275,27 @@ class Krylov_forces(Krylov_pre_calc):
 
         for U in c2p["U"].values():
             if U["r"][0] <= x0[3] <= U["r"][1]:
-                a2 = self.coeffs(x0[3], *U["a2"])
-                b2 = self.coeffs(x0[3], *U["b2"])
+                a2 = coeffs(x0[3], *U["a2"])
+                b2 = coeffs(x0[3], *U["b2"])
         
         Q = a2 * (L/ B) + b2
         c2 = np.clip(a3 * Q + b3, 0.3, 1.6)
 
         return c2
 
-    def calc_c3(self, LB, TmL, cp):
-        a2 = self.coeffs(TmL, 2.269, -0.5805, 0.00183)
-        b2 = self.coeffs(TmL, -27.7, 6.428, -0.01749)
+    def calc_c3(self, LB, TmL, cp, coeffs):
+        a2 = coeffs(TmL, 2.269, -0.5805, 0.00183)
+        b2 = coeffs(TmL, -27.7, 6.428, -0.01749)
 
         if cp <= 0.72:
-            a1 = self.coeffs(cp, 24.65, -29.67, 7.547)
+            a1 = coeffs(cp, 24.65, -29.67, 7.547)
         elif cp > 0.72:
-            a1 = self.coeffs(cp, 0, 5.917, 5.3)
+            a1 = coeffs(cp, 0, 5.917, 5.3)
 
         if cp <= 0.68:
-            b1 = self.coeffs(cp, -60.44, 74.61, 9.255)
+            b1 = coeffs(cp, -60.44, 74.61, 9.255)
         elif cp > 0.68:
-            b1 = self.coeffs(cp, 0, 10.08, 20.34)
+            b1 = coeffs(cp, 0, 10.08, 20.34)
 
         U = a1 * LB + b1
         c3 = np.clip(a2 * U + b2, 0.0, 0.35)
@@ -295,17 +308,17 @@ class Krylov_forces(Krylov_pre_calc):
                 for sigma in lb["sigma"].values():
                     if sigma["r"][0] is None and sigma["r"][1] is None:
                         print()
-                        a1 = self.coeffs(LB, *sigma["a1"])
-                        b1 = self.coeffs(LB, *sigma["b1"])
+                        a1 = coeffs(LB, *sigma["a1"])
+                        b1 = coeffs(LB, *sigma["b1"])
                     elif sigma["r"][0] <= self.sigma <= sigma["r"][1]:
-                        a1 = self.coeffs(LB, *sigma["a1"])
-                        b1 = self.coeffs(LB, *sigma["b1"])
+                        a1 = coeffs(LB, *sigma["a1"])
+                        b1 = coeffs(LB, *sigma["b1"])
 
-        a2 = self.coeffs(TmL, 16.67, -11.92, 0.06)
-        b2 = self.coeffs(TmL, 261.1, 213.6, 2.468)
+        a2 = coeffs(TmL, 16.67, -11.92, 0.06)
+        b2 = coeffs(TmL, 261.1, 213.6, 2.468)
 
-        a3 = self.coeffs(cp, 0.2392, -0.4009, 0.1815)
-        b3 = self.coeffs(cp, 0.4033, -0.6965, 0.3263)
+        a3 = coeffs(cp, 0.2392, -0.4009, 0.1815)
+        b3 = coeffs(cp, 0.4033, -0.6965, 0.3263)
 
         U = a1 * LB + b1
         Q = a2 * U + b2
@@ -317,24 +330,24 @@ class Krylov_forces(Krylov_pre_calc):
 
     def calc_ms(self, TmL, sigma, LB, cp):
         # ----m1------
-        a1 = self.coeffs(TmL, -0.1317, 0.05358, 0.000181)
-        b1 = self.coeffs(TmL, -2.361, 0.8653, -0.000161)
+        a1 = coeffs(TmL, -0.1317, 0.05358, 0.000181)
+        b1 = coeffs(TmL, -2.361, 0.8653, -0.000161)
 
         if cp <= 0.72:
-            U0 = self.coeffs(sigma, -235, 474.2, 235.8)
-            SCP = self.coeffs(cp, -74.67, 110.9, -39.64)
+            U0 = coeffs(sigma, -235, 474.2, 235.8)
+            SCP = coeffs(cp, -74.67, 110.9, -39.64)
         elif cp > 0.72:
-            U0 = self.coeffs(sigma, -210, 422.9, 207.2)
-            SCP = self.coeffs(cp, 12, -8.8, -0.64)
+            U0 = coeffs(sigma, -210, 422.9, 207.2)
+            SCP = coeffs(cp, 12, -8.8, -0.64)
         
         UUU = U0 + SCP
 
         if UUU >= 4:
             Su = -1.3 * UUU + 7.8
-            Sv0 = self.coeffs(LB, 0.02333, -0.045, 1.187)
+            Sv0 = coeffs(LB, 0.02333, -0.045, 1.187)
         else:
             Su = -1.3 * UUU + 2.6
-            Sv0 = self.coeffs(LB, 0.02333, -0.045, 1.187) + 0.01 * UUU 
+            Sv0 = coeffs(LB, 0.02333, -0.045, 1.187) + 0.01 * UUU 
 
         S = Su + Sv0
         m1 = np.clip(a1 * S + b1,0.02, 0.08)
@@ -357,23 +370,23 @@ class Krylov_forces(Krylov_pre_calc):
     
         # ----m4------
         if TmL <= 0.028:
-            Sm4 = self.coeffs(TmL, -71.88, 4.238, -0.066)
+            Sm4 = coeffs(TmL, -71.88, 4.238, -0.066)
         elif 0.028 < TmL <= 0.04:
-            Sm4 = self.coeffs(TmL, -9.375, 0.8875, 0.0121)
+            Sm4 = coeffs(TmL, -9.375, 0.8875, 0.0121)
         else:
-            Sm4 = self.coeffs(TmL, -3.833, 0.415, -0.01117)
+            Sm4 = coeffs(TmL, -3.833, 0.415, -0.01117)
         
         if 0.55 <= cp <= 0.64:
-            U0 = self.coeffs(cp, -140.62, 180.62, 53.35)
+            U0 = coeffs(cp, -140.62, 180.62, 53.35)
         elif 0.64 < cp <= 0.74:
-            U0 = self.coeffs(cp, -56.67, 75.1, -20.2)
+            U0 = coeffs(cp, -56.67, 75.1, -20.2)
         else:
-            U0 = self.coeffs(cp, -216.7, 312.8, 108.51)
+            U0 = coeffs(cp, -216.7, 312.8, 108.51)
         
         if sigma <= 0.96:
-            Ss = self.coeffs(sigma, 1900, -3696, 1796)
+            Ss = coeffs(sigma, 1900, -3696, 1796)
         elif sigma > 0.96:
-            Ss = self.coeffs(sigma, 391.7, -810.4, 415.8)
+            Ss = coeffs(sigma, 391.7, -810.4, 415.8)
         
         UUUUU = U0 + Ss
         Su = 0.00827 * UUUUU - 0.017
@@ -389,7 +402,7 @@ class Krylov_forces(Krylov_pre_calc):
         cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
         return cn_beta, cxb
     
-    def calc_cn(self, c2, cn_beta, beta_eff, Tml, sigma, LB):
+    def calc_cn(self, x0, c2, cn_beta, beta_eff, Tml, sigma, LB):
         cn0 = 0.059*c2
         cnw2= (0.739 +8.7 * Tml)*(1.611*(sigma**2)-2.873*sigma+1.33)
 
@@ -401,12 +414,12 @@ class Krylov_forces(Krylov_pre_calc):
         # omega is rate of turn
 
         if self.Uchar > self.eps:
-            omega_strich = self.x0[5] * self.L/ self.Uchar
+            omega_strich = x0[5] * self.L/ self.Uchar
             omega_large = omega_strich /np.sqrt(1+omega_strich**2)
         else:
             omega_large = 1.0 
 
-        cnom = -cn0*abs(self.x0[5])* self.x0[5]*self.L**2 - cnw/ np.pi*(self.Uchar**2 +(self.x0[5]**2)*self.L**2)* np.sin(np.pi*omega_large)
+        cnom = -cn0*abs(x0[5])* x0[5]*self.L**2 - cnw/ np.pi*(self.Uchar**2 +(x0[5]**2)*self.L**2)* np.sin(np.pi*omega_large)
 
         self.cn = cnom +cn_beta*self.Uchar**2 # called cn_full
 
@@ -414,9 +427,21 @@ class Krylov_forces(Krylov_pre_calc):
     #------------------------------------------------------
 
     # Propeller Forces
-    def calc_propeller_forces(self, N: list, urx, w, D_p, prop_openwater: pd.DataFrame, Thr: list):
+    def calc_propeller_Thrust(self, N: list,  Thr: list):
+        pass
         # in init
-        T= [len(self.sp["nop"])]
+
+
+
+    def calc_pod_forces(self, input: pd.DataFrame, input_colums,  Thr: list, dbh, lop, lcg, urx, w, D_p, prop_openwater: pd.DataFrame):
+        # changed from original kryov code: each pod gets its own delta_r and therefore the forces and moments differ 
+        # NOTE!!: pod thrust is first assmued to be in the rotating center of the pod. Later the effects of another lever arm can be added 
+        # the pod forces are acting through the pod rotation center on the ship therefore no leverarm is assumed for either azipull or push thrusters
+        # this code only works with even numbers of pods which are symetrically arranged at the back of the ship
+        
+        N = [input.iloc[0][input_colums[:1]].values()]
+
+        T = [len(self.sp["nop"])]
         # ------
         if self.sp["noh"] == 1:
             #Advance Ratio J
@@ -428,16 +453,12 @@ class Krylov_forces(Krylov_pre_calc):
                 J = urx * (1- w)/ (n* D_p)
                 Kt = np.interp(J, prop_openwater["J"], prop_openwater["KT"])
                 T[i] = Kt * self.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
-        # first version summation of all thrust, not suitable for Podthrusters wirth different angles
-        return T
+        
 
-    def calc_pod_forces(self, input: pd.DataFrame, Thr: list, dbh, lop, lcg):
-        # changed from original kryov code: each pod gets its own delta_r and therefore the forces and moments differ 
-        # NOTE!!: pod thrust is first assmued to be in the rotating center of the pod. Later the effects of another lever arm can be added 
-        # the pod forces are acting through the pod rotation center on the ship therefore no leverarm is assumed for either azipull or push thrusters
-        # this code only works with even numbers of pods which are symetrically arranged at the back of the ship
-        
-        
+
+
+
+
         if self.sp["Pod"] == 1:
             # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
             X_pod, Y_pod, N_pod = 0, 0, 0
