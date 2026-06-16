@@ -1,0 +1,57 @@
+import numpy as np
+import pandas as pd
+
+def create_test_data(
+    duration_s: float,
+    rpm: float,
+    rudder_angle: float,
+    fs: float = 100.0
+) -> pd.DataFrame:
+    """
+    Erzeugt synthetische Testdaten für ein System mit konstanter Drehzahl
+    und konstantem Ruderwinkel.
+
+    Parameters
+    ----------
+    duration_s : float
+        Versuchsdauer in Sekunden
+    rpm : float
+        konstante Drehzahl
+    rudder_angle : float
+        konstanter Ruderwinkel
+    fs : float
+        Samplingrate (Hz), default 10 Hz
+
+    Returns
+    -------
+    pd.DataFrame
+        Index: time [s]
+        Columns: N0, N1, delta0, delta1
+    """
+
+    dt = 1.0 / fs
+    t = np.arange(0, duration_s + dt, dt)
+
+    # einfache, konsistente Systemabbildung (placeholder Modell)
+    # N = Funktion aus rpm + rudder coupling
+    N = rpm 
+
+    # delta = konstante Eingangsgröße + leichte skalierte Kopplung
+    delta = rudder_angle * np.ones_like(t)
+
+    df = pd.DataFrame({
+        "N0": N,
+        "N1": N,
+        "delta_r0": delta,
+        "delta_r1": delta
+    }, index=t)
+
+    df.index.name = "time_s"
+
+    return df
+
+if __name__ == "__main__":
+    # Beispiel für die Erstellung von Testdaten
+    test_data = create_test_data(duration_s=60, rpm=80, rudder_angle=10)
+    test_data.to_csv("data/01_raw/wlfa/test_data.csv")
+    print(test_data.head())

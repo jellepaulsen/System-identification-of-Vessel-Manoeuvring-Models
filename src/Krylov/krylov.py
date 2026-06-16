@@ -1,10 +1,12 @@
-from dataclasses import dataclass
-from krylov_data import ShipConfig
 import numpy as np
 import math
 import pandas as pd
 import sympy as sp
 import yaml 
+
+from dataclasses import dataclass
+from krylov_data import ShipConfig
+from scipy.integrate import solve_ivp
 
 def calc_helper():
     pass
@@ -92,6 +94,26 @@ class Krylov_forces(Krylov_pre_calc):
 
     # def test(self, x0 = None, input = None, input_columns = None, sd: ShipConfig = None, eps = None):
     #     self.forces(x0 = x0, input = input, input_columns = input_columns, sd = sd, eps = eps)
+    
+    def simulate(self, data: pd.DataFrame, x0_,  input_columns: list, state_columns: list):
+        rhs = self.make_rhs(input = data[input_columns], input_columns = input_columns, state_columns = state_columns, sd = self.sd, eps = self.eps)
+        # here the integration of the rhs function needs to be implemented, e.g. with scipy solve_ivp or a custom implementation
+        # the output should be a DataFrame with the same columns as state_columns and the same index as data
+        
+        t = data.index
+        t_span = [t.min(), t.max()]
+        t_eval = np.linspace(t.min(), t.max(), len(t))
+
+        # sol = solve_ivp(rhs, t_span, data[state_columns].iloc[0].values, t_eval=t_eval, method='RK45')
+        sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='RK45')
+
+        df_sim = pd.DataFrame(sol.y.T, columns=state_columns, index=t_eval)
+        return df_sim
+    
+    
+    
+    
+    
     def equations(self, x0_, input, input_columns, sd: ShipConfig, eps):
         # movement equations for the forces, to be simplified and lambdified with sympy
         # total masses including added masses 
@@ -113,24 +135,29 @@ class Krylov_forces(Krylov_pre_calc):
                     (u * sp.cos(psi) - v * sp.sin(psi))*dt,
                     (u* sp.sin(psi) + v * sp.cos(psi))*dt,
                     r*dt
-        ])
+                ])
+
     
-    def make_rhs(self, input, input_columns, sd, eps):
+    def make_rhs(self, input, input_columns, state_columns, sd, eps):
 
         def rhs(t, y):
             x0_ = y
-            states = input_columns
             
             # self.data.iloc[t][self.state_columns].values()
 
             rhs_sym = self.equations(x0_= x0_, input = input.iloc[t][input_columns].values(), input_columns = input_columns, sd = sd, eps = eps)
 
-            rhs_func = sp.lambdify(input_columns, rhs_sym, modules="numpy")
+            input_vars = set(state_columns) - rhs_sym.free_symbols # remove not used state variables from state columns normaly x, y 
 
-            return np.asanyarray(rhs_func(x0_, input.iloc[t][input_columns].values(), input_columns, sd, eps)).ravel()
+            rhs_func = sp.lambdify(input_vars, rhs_sym, modules="numpy")
+
+            return np.asanyarray(rhs_func(x0_, input.iloc[t][list(input_vars)].values(), input_columns, sd, eps)).ravel()
         
 
         return rhs
+
+
+
 
 
     def interpol_N():
@@ -639,6 +666,8 @@ if __name__ == "__main__":
     with open("data/01_raw/wlfa/freif.inp", "r") as f:
         prop_openwater = pd.read_csv(f, sep='\s+', header=None, names=['J', 'KT', 'KQ'])
 
+    with open("data/01_raw/wlfa/test_data.csv", "r") as f:
+        input_data = pd.read_csv(f)
 
     # test_calc_rudder_forces_direct()
 
@@ -663,7 +692,7 @@ if __name__ == "__main__":
     kf = Krylov_forces(krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater, data = data)
     # kf.sd.Fn = 0.50
     # kf.xtg = -0.03
-    x0 = [0,0,0,2,1,0]
-    x, y, n = kf.forces(x0 = x0, eps = kf.eps, input = data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
-    print(f"Krylov forces: X={x:.2f}, Y={y:.2f}, N={n:.2f}")
+    x0 = [0,0,0,0,0,0]
+    kf.simulate(input_data, x0,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
+    # x, y, n = kf.forces(x0 = x0, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
     print(kf.rhs())
