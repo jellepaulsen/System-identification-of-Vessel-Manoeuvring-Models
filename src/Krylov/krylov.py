@@ -410,10 +410,11 @@ class Krylov_forces(Krylov_pre_calc):
         return c2, c3
 
     def calc_cy_beta(self, LB, TmL, cp, sigma, beta_eff, beta_eff_sign, c2, c3):
-        
+        print("hallo hier bin ich")
         for lb in self.cy_betap.values():
             print(f"LB: {LB}, {lb['r'][0]}, {lb['r'][1]}")
             if lb["r"][0] <= LB <= lb["r"][1]:
+                print(f"lb sigma: {lb['sigma']}")
                 for sigmas in lb["sigma"].values():
                     print(f"sigma: {sigma}, {sigmas['r'][0]}, {sigmas['r'][1]}")
                     if sigmas["r"][0] is None and sigmas["r"][1] is None:
@@ -718,8 +719,8 @@ if __name__ == "__main__":
     # fig = ship_resistance.plot(x="kn", y="kN", kind="line", title="Resistance Curve", labels={"kn": "Speed (knots)", "kN": "Resistance (kN)"})
     # fig.show()
 
-    kpc = Krylov_pre_calc(ship_parameters, krylov_parameters)
-    kpc.hydro_mass()
+    # kpc = Krylov_pre_calc(ship_parameters, krylov_parameters)
+    # kpc.hydro_mass()
 
 
     data = pd.DataFrame({
@@ -736,6 +737,7 @@ if __name__ == "__main__":
     })
 
     kf = Krylov_forces(krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater, data = data)
+    kf.hydromass()
     # kf.sd.Fn = 0.50
     # kf.xtg = -0.03
     x0_ = [0,0,0,6,0,0]
