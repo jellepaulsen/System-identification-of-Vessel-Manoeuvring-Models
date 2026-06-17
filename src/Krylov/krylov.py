@@ -114,14 +114,15 @@ class Krylov_forces(Krylov_pre_calc):
     
     
     
-    def equations(self, x0_, input, input_columns, sd: ShipConfig, eps):
+    
+    def equations(self, x0_, input: pd.DataFrame, input_columns, sd: ShipConfig, eps):
         # movement equations for the forces, to be simplified and lambdified with sympy
         # total masses including added masses 
         m_x = self.hydro_mass_dict["m11"] + self.sd.m
         m_y = self.hydro_mass_dict["m22"] + self.sd.m
         m_n = self.hydro_mass_dict["m66"] + self.sd.I_z
 
-        F_X, F_Y, M_N = self.forces(x0 = x0_, input = input, input_columns = input_columns, sd = sd, eps = eps)
+        F_X, F_Y, M_N = self.forces(x0_ = x0_, input = input, input_columns = input_columns, sd = sd, eps = eps)
 
         F_X, F_Y, M_N = sp.symbols('F_X F_Y M_N')
         m_x, m_y, m_n = sp.symbols('m_x m_y m_n')
@@ -142,16 +143,18 @@ class Krylov_forces(Krylov_pre_calc):
 
         def rhs(t, y):
             x0_ = y
-            
+            print(input.head())
             # self.data.iloc[t][self.state_columns].values()
+            # Zero-Order-Hold -> 
+            i = input.index.get_indexer([t], method="pad")[0]
 
-            rhs_sym = self.equations(x0_= x0_, input = input.iloc[t][input_columns].values(), input_columns = input_columns, sd = sd, eps = eps)
+            rhs_sym = self.equations(x0_= x0_, input = input.loc[[i],input_columns], input_columns = input_columns, sd = sd, eps = eps)
 
             input_vars = set(state_columns) - rhs_sym.free_symbols # remove not used state variables from state columns normaly x, y 
 
             rhs_func = sp.lambdify(input_vars, rhs_sym, modules="numpy")
 
-            return np.asanyarray(rhs_func(x0_, input.iloc[t][list(input_vars)].values(), input_columns, sd, eps)).ravel()
+            return np.asanyarray(rhs_func(x0_, input.loc[[t], list(input_vars)].values(), input_columns, sd, eps)).ravel()
         
 
         return rhs
@@ -167,7 +170,7 @@ class Krylov_forces(Krylov_pre_calc):
 
     def forces(self,
                 x0_ = None,
-                input = None,
+                input: pd.DataFrame = None,
                 input_columns = None,
                 sd: ShipConfig = None,
                 eps = None
@@ -277,7 +280,16 @@ class Krylov_forces(Krylov_pre_calc):
         RTx0 = np.interp(Uchar, ship_resistance["kn"]*0.5144 , ship_resistance["kN"])
 
         # NOTE: For catamaran the wetted area of demi hull is used!!! Whereas RT is for the whole ship!!
+
+        # resolve devision by zero error for speeds very close to zero setting speed to eps 
+        # not sure if suitable
+        if Uchar < self.eps and Uchar >= 0:
+            Uchar = self.eps
+        elif Uchar > -self.eps and Uchar < 0:
+            Uchar = -self.eps
+
         return RTx0 / (0.5 * sd.rho * Uchar**2 * sd.S) 
+
 
     def eff_drift_angle(self, x0_, eps):
         
@@ -336,7 +348,7 @@ class Krylov_forces(Krylov_pre_calc):
         Asigma = L * Tm * sigma 
         return sigma, Asigma
 
-    def calc_cs(self, L, B, TmL, c2p, x0, cp, sigma, LB):    
+    def calc_cs(self, L, B, TmL, c2p, x0_, cp, sigma, LB):    
         for tml in c2p.values():
             if "tml" in tml.keys():
                 if tml["tml"][0] <= TmL <= tml["tml"][1]:
@@ -349,9 +361,9 @@ class Krylov_forces(Krylov_pre_calc):
         U = c2_a1 * sigma + c2_b1
 
         for U in c2p["U"].values():
-            if U["r"][0] <= x0[3] <= U["r"][1]:
-                c2_a2 = coeffs(x0[3], *U["a2"])
-                c2_b2 = coeffs(x0[3], *U["b2"])
+            if U["r"][0] <= x0_[3] <= U["r"][1]:
+                c2_a2 = coeffs(x0_[3], *U["a2"])
+                c2_b2 = coeffs(x0_[3], *U["b2"])
         
         Q = c2_a2 * (L/ B) + c2_b2
         c2 = np.clip(c2_a3 * Q + c2_b3, 0.3, 1.6)
@@ -473,7 +485,7 @@ class Krylov_forces(Krylov_pre_calc):
         cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
         return cn_beta, cxb
     
-    def calc_cn(self, x0, sd, c2, cn_beta, beta_eff, Tml, sigma, LB, Uchar, eps):
+    def calc_cn(self, x0_, sd, c2, cn_beta, beta_eff, Tml, sigma, LB, Uchar, eps):
         cn0 = 0.059*c2
         cnw2= (0.739 +8.7 * Tml)*(1.611*(sigma**2)-2.873*sigma+1.33)
 
@@ -485,12 +497,12 @@ class Krylov_forces(Krylov_pre_calc):
         # omega is rate of turn
 
         if Uchar > eps:
-            omega_strich = x0[5] * sd.L/ Uchar
+            omega_strich = x0_[5] * sd.L/ Uchar
             omega_large = omega_strich /np.sqrt(1+omega_strich**2)
         else:
             omega_large = 1.0 
 
-        cnom = -cn0*abs(x0[5])* x0[5]*sd.L**2 - cnw/ np.pi*(Uchar**2 +(x0[5]**2)*sd.L**2)* np.sin(np.pi*omega_large)
+        cnom = -cn0*abs(x0_[5])* x0_[5]*sd.L**2 - cnw/ np.pi*(Uchar**2 +(x0_[5]**2)*sd.L**2)* np.sin(np.pi*omega_large)
 
         return cnom +cn_beta*Uchar**2 # called cn
 
@@ -667,7 +679,7 @@ if __name__ == "__main__":
         prop_openwater = pd.read_csv(f, sep='\s+', header=None, names=['J', 'KT', 'KQ'])
 
     with open("data/01_raw/wlfa/test_data.csv", "r") as f:
-        input_data = pd.read_csv(f)
+        input_data = pd.read_csv(f, index_col=0)
 
     # test_calc_rudder_forces_direct()
 
