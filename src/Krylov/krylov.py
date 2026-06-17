@@ -3,6 +3,8 @@ import math
 import pandas as pd
 import sympy as sp
 import yaml 
+import matplotlib.pyplot as plt
+
 
 from dataclasses import dataclass
 from krylov_data import ShipConfig
@@ -13,6 +15,10 @@ def calc_helper():
 
 def coeffs(value, a,b,c):
     return a*value**2 + b*value + c
+
+def clean_input_vars(list_of_vars: list, state_columns: list, input_vars: list):
+    return [x for i,x in enumerate(list_of_vars) if state_columns[i] in input_vars]
+
 
 class Krylov_pre_calc:    
     def __init__(self, ship_parameters: dict, krylov_parameters: dict):
@@ -96,7 +102,24 @@ class Krylov_forces(Krylov_pre_calc):
     #     self.forces(x0 = x0, input = input, input_columns = input_columns, sd = sd, eps = eps)
     
     def simulate(self, data: pd.DataFrame, x0_,  input_columns: list, state_columns: list):
-        rhs = self.make_rhs(input = data[input_columns], input_columns = input_columns, state_columns = state_columns, sd = self.sd, eps = self.eps)
+        '''
+        input columns: N und Delta_r
+        state columns: x0, y0, psi, u, v, r
+        x0_: initial state for the integration
+        data: DataFrame with the input data, index should be time and columns should include the input_columns and state_columns
+        '''
+        sd = self.sd
+        eps = self.eps
+        
+        rhs_sym = self.equations()
+
+
+        rhs_input = state_columns + ["F_X", "F_Y", "M_N"]
+
+        rhs_func = sp.lambdify(rhs_input, rhs_sym, modules="numpy")
+
+        rhs = self.make_rhs(rhs_func = rhs_func, input = data[input_columns], input_columns = input_columns, state_columns = state_columns, sd = sd, eps = eps)
+
         # here the integration of the rhs function needs to be implemented, e.g. with scipy solve_ivp or a custom implementation
         # the output should be a DataFrame with the same columns as state_columns and the same index as data
         
@@ -105,6 +128,8 @@ class Krylov_forces(Krylov_pre_calc):
         t_eval = np.linspace(t.min(), t.max(), len(t))
 
         # sol = solve_ivp(rhs, t_span, data[state_columns].iloc[0].values, t_eval=t_eval, method='RK45')
+
+
         sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='RK45')
 
         df_sim = pd.DataFrame(sol.y.T, columns=state_columns, index=t_eval)
@@ -115,51 +140,47 @@ class Krylov_forces(Krylov_pre_calc):
     
     
     
-    def equations(self, x0_, input: pd.DataFrame, input_columns, sd: ShipConfig, eps):
+    def equations(self):
         # movement equations for the forces, to be simplified and lambdified with sympy
-        # total masses including added masses 
-        m_x = self.hydro_mass_dict["m11"] + self.sd.m
-        m_y = self.hydro_mass_dict["m22"] + self.sd.m
-        m_n = self.hydro_mass_dict["m66"] + self.sd.I_z
-
-        F_X, F_Y, M_N = self.forces(x0_ = x0_, input = input, input_columns = input_columns, sd = sd, eps = eps)
 
         F_X, F_Y, M_N = sp.symbols('F_X F_Y M_N')
         m_x, m_y, m_n = sp.symbols('m_x m_y m_n')
-        dt = sp.symbols('dt')
+        # dt = sp.symbols('dt')
         x0, y0, psi, u, v, r = sp.symbols('x0 y0 psi u v r')
         
-        return sp.Matrix([
-                    (F_X + m_y*r*v)/ m_x*dt,
-                    (-m_x*r*u + F_Y)/m_y*dt,
-                    M_N / m_n * dt,
-                    (u * sp.cos(psi) - v * sp.sin(psi))*dt,
-                    (u* sp.sin(psi) + v * sp.cos(psi))*dt,
-                    r*dt
+        rhs_sym = sp.Matrix([
+                    (u * sp.cos(psi) - v * sp.sin(psi)),
+                    (u* sp.sin(psi) + v * sp.cos(psi)),
+                    r,
+                    (F_X + m_y*r*v)/ m_x,
+                    (-m_x*r*u + F_Y)/m_y,
+                    M_N / m_n
                 ])
+        
+        rhs_sym = rhs_sym.subs({
+            m_x: self.hydro_mass_dict["m11"] + self.sd.m,
+            m_y: self.hydro_mass_dict["m22"] + self.sd.m,
+            m_n: self.hydro_mass_dict["m66"] + self.sd.I_z
+        })
 
+        return rhs_sym
     
-    def make_rhs(self, input, input_columns, state_columns, sd, eps):
+    def make_rhs(self, rhs_func, input, input_columns, state_columns, sd, eps):
 
         def rhs(t, y):
             x0_ = y
-            print(input.head())
+            
             # self.data.iloc[t][self.state_columns].values()
             # Zero-Order-Hold -> 
             i = input.index.get_indexer([t], method="pad")[0]
+            forces = np.array(self.forces(x0_ = x0_, input = input.iloc[[i]][input_columns], input_columns = input_columns, sd = sd, eps = eps))
+            y = np.concatenate((x0_, forces))
 
-            rhs_sym = self.equations(x0_= x0_, input = input.loc[[i],input_columns], input_columns = input_columns, sd = sd, eps = eps)
-
-            input_vars = set(state_columns) - rhs_sym.free_symbols # remove not used state variables from state columns normaly x, y 
-
-            rhs_func = sp.lambdify(input_vars, rhs_sym, modules="numpy")
-
-            return np.asanyarray(rhs_func(x0_, input.loc[[t], list(input_vars)].values(), input_columns, sd, eps)).ravel()
-        
-
+            return np.asanyarray(rhs_func(*y)).ravel()
         return rhs
 
-
+# 
+# 
 
 
 
@@ -211,7 +232,7 @@ class Krylov_forces(Krylov_pre_calc):
         ucy = 0
         x0_[3] = x0_[3] + ucx 
         x0_[4] = x0_[4] + ucy 
-        return x0
+        return x0_
 
     #------------------------------------------------------
     # Krylov Force
@@ -277,17 +298,19 @@ class Krylov_forces(Krylov_pre_calc):
     def get_cx0(self, sd: ShipConfig = None, ship_resistance = None, Uchar = None, ):
         # interpolate zerodrift resistance from resistance curve
         # print(ship_resistance)
-        RTx0 = np.interp(Uchar, ship_resistance["kn"]*0.5144 , ship_resistance["kN"])
+        RTx0 = np.interp(Uchar, ship_resistance["kn"] , ship_resistance["kN"])
 
         # NOTE: For catamaran the wetted area of demi hull is used!!! Whereas RT is for the whole ship!!
 
         # resolve devision by zero error for speeds very close to zero setting speed to eps 
         # not sure if suitable
-        if Uchar < self.eps and Uchar >= 0:
-            Uchar = self.eps
-        elif Uchar > -self.eps and Uchar < 0:
-            Uchar = -self.eps
-
+        if Uchar < 0.1 and Uchar >= 0:
+            Uchar = 0.1
+        elif Uchar > -0.1 and Uchar < 0:
+            Uchar = -0.1
+        print(f"Uchar: {Uchar}, RTx0: {RTx0}")
+        if sd.noh == 2:
+            return RTx0 / (sd.rho * Uchar**2 * sd.S)
         return RTx0 / (0.5 * sd.rho * Uchar**2 * sd.S) 
 
 
@@ -387,13 +410,18 @@ class Krylov_forces(Krylov_pre_calc):
         return c2, c3
 
     def calc_cy_beta(self, LB, TmL, cp, sigma, beta_eff, beta_eff_sign, c2, c3):
+        
         for lb in self.cy_betap.values():
+            print(f"LB: {LB}, {lb['r'][0]}, {lb['r'][1]}")
             if lb["r"][0] <= LB <= lb["r"][1]:
                 for sigmas in lb["sigma"].values():
+                    print(f"sigma: {sigma}, {sigmas['r'][0]}, {sigmas['r'][1]}")
                     if sigmas["r"][0] is None and sigmas["r"][1] is None:
+                        print("1")
                         a1 = coeffs(LB, *sigmas["a1"])
                         b1 = coeffs(LB, *sigmas["b1"])
                     elif sigmas["r"][0] <= sigma <= sigmas["r"][1]:
+                        print("2")
                         a1 = coeffs(LB, *sigmas["a1"])
                         b1 = coeffs(LB, *sigmas["b1"])
 
@@ -481,6 +509,8 @@ class Krylov_forces(Krylov_pre_calc):
     def calc_cn_beta(self, cx0, beta_eff, m):
         beta = beta_eff
         cn_beta = m[0]*np.sin(2*beta)+m[1]*np.sin(beta)+m[2]*(np.sin(2*beta)**3) + m[3] * (np.sin(2*beta)**5)
+        if cx0/self.kp['a1x'] > 1 or cx0/self.kp['a1x'] < -1:
+            print(f"Invalid arcsin input: {cx0/self.kp['a1x']}, {cx0}, {self.kp['a1x']}")
 
         cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
         return cn_beta, cxb
@@ -684,6 +714,10 @@ if __name__ == "__main__":
     # test_calc_rudder_forces_direct()
 
 
+    # pd.options.plotting.backend = "plotly"
+    # fig = ship_resistance.plot(x="kn", y="kN", kind="line", title="Resistance Curve", labels={"kn": "Speed (knots)", "kN": "Resistance (kN)"})
+    # fig.show()
+
     kpc = Krylov_pre_calc(ship_parameters, krylov_parameters)
     kpc.hydro_mass()
 
@@ -704,7 +738,9 @@ if __name__ == "__main__":
     kf = Krylov_forces(krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater, data = data)
     # kf.sd.Fn = 0.50
     # kf.xtg = -0.03
-    x0 = [0,0,0,0,0,0]
-    kf.simulate(input_data, x0,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
-    # x, y, n = kf.forces(x0 = x0, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
-    print(kf.rhs())
+    x0_ = [0,0,0,6,0,0]
+
+
+    df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
+    # x, y, n = kf.forces(x0 = x0_, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
+    print(df.head())

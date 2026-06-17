@@ -82,7 +82,10 @@ class ShipConfig:
         self.I_z = self.scale_dim(self.I_z, 4) # need to be checked
         self.askeg = self.scale_dim(self.askeg, 2)
 
-        self.LB = self.L / self.B
+        if self.noh == 2:
+            self.LB = self.L/(self.B+self.dbh)
+        else:
+            self.LB = self.L / self.B
 
 
         self.m = self.volume*self.rho
@@ -90,7 +93,7 @@ class ShipConfig:
         self.xtg = self.lcg/self.L # lcg in per from ap
 
         if self.LB > 11:
-             raise ValueError("LB must be <= 11")
+             raise ValueError(f"LB must be <= 11 {self.LB} for ship {self.shiptype}")
 
     def scale_dim(self, value, exp):
         return value * self.scale_factor**exp
