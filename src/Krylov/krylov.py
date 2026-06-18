@@ -994,7 +994,7 @@ if __name__ == "__main__":
     df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
     
     fig_2 = df.plot(x="x0", y="y0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
-    fig.update_yaxes(
+    fig_2.update_yaxes(
             scaleanchor="x",
             scaleratio=1
             )   
