@@ -1,10 +1,13 @@
+import pstats
+from time import time
+
 import numpy as np
 import math
 import pandas as pd
 import sympy as sp
 import yaml 
 import matplotlib.pyplot as plt
-
+import cProfile
 
 from dataclasses import dataclass
 from krylov_data import ShipConfig
@@ -100,6 +103,15 @@ class Krylov_forces(Krylov_pre_calc):
 
     # def test(self, x0 = None, input = None, input_columns = None, sd: ShipConfig = None, eps = None):
     #     self.forces(x0 = x0, input = input, input_columns = input_columns, sd = sd, eps = eps)
+    def timer(func):
+        def wrapper(*args, **kwargs):
+            start_time = time()
+            result = func(*args, **kwargs)
+            end_time = time()
+            print(f"Execution time: {end_time - start_time} seconds")
+            return result
+
+        return wrapper
     
     def simulate(self, data: pd.DataFrame, x0_,  input_columns: list, state_columns: list):
         '''
@@ -108,17 +120,25 @@ class Krylov_forces(Krylov_pre_calc):
         x0_: initial state for the integration
         data: DataFrame with the input data, index should be time and columns should include the input_columns and state_columns
         '''
+        print("Initializing simulation with Krylov forces...")
         sd = self.sd
         eps = self.eps
         
-        rhs_sym = self.equations()
+        # translate to numpy to gain performance
+        t_input = data.index.to_numpy()
+        input_data = data[input_columns].to_numpy()
 
+
+        n_y = len(state_columns) + 3 # length of input_array for rhs
+        y_ = np.empty(n_y) # state + forces
+
+        rhs_sym = self.equations()
 
         rhs_input = state_columns + ["F_X", "F_Y", "M_N"]
 
         rhs_func = sp.lambdify(rhs_input, rhs_sym, modules="numpy")
 
-        rhs = self.make_rhs(rhs_func = rhs_func, input = data[input_columns], input_columns = input_columns, state_columns = state_columns, sd = sd, eps = eps)
+        rhs = self.make_rhs(rhs_func = rhs_func, input = input_data, input_id = t_input, input_columns = input_columns, state_columns = state_columns, y_array = y_, sd = sd, eps = eps)
 
         # here the integration of the rhs function needs to be implemented, e.g. with scipy solve_ivp or a custom implementation
         # the output should be a DataFrame with the same columns as state_columns and the same index as data
@@ -129,16 +149,21 @@ class Krylov_forces(Krylov_pre_calc):
 
         # sol = solve_ivp(rhs, t_span, data[state_columns].iloc[0].values, t_eval=t_eval, method='RK45')
 
-
+        profiler = cProfile.Profile()
+        profiler.enable()
+        
+        print("Starting integration...")
         sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='RK45')
+        print("Integration completed.")
+
+        profiler.disable()
+        stats = pstats.Stats(profiler).sort_stats('cumtime')
+        stats.print_stats(10)  # Print top 10 functions by cumulative time
 
         df_sim = pd.DataFrame(sol.y.T, columns=state_columns, index=t_eval)
         return df_sim
     
-    
-    
-    
-    
+  
     
     def equations(self):
         # movement equations for the forces, to be simplified and lambdified with sympy
@@ -165,18 +190,20 @@ class Krylov_forces(Krylov_pre_calc):
 
         return rhs_sym
     
-    def make_rhs(self, rhs_func, input, input_columns, state_columns, sd, eps):
+    def make_rhs(self, rhs_func, input, input_id, input_columns, state_columns, y_array, sd, eps):
 
         def rhs(t, y):
             x0_ = y
             
             # self.data.iloc[t][self.state_columns].values()
             # Zero-Order-Hold -> 
-            i = input.index.get_indexer([t], method="pad")[0]
-            forces = np.array(self.forces(x0_ = x0_, input = input.iloc[[i]][input_columns], input_columns = input_columns, sd = sd, eps = eps))
-            y = np.concatenate((x0_, forces))
+            i = np.searchsorted(input_id, t, side="right") - 1 # finde the corresponding index from input data. -1 take last step not next step
 
-            return np.asanyarray(rhs_func(*y)).ravel()
+            forces = self.forces(x0_ = x0_, input = input[i], input_columns = input_columns, sd = sd, eps = eps)
+            y_array[:len(state_columns)] = x0_
+            y_array[len(state_columns):] = forces
+
+            return np.asanyarray(rhs_func(*y_array)).ravel()
         return rhs
 
 # 
@@ -188,6 +215,7 @@ class Krylov_forces(Krylov_pre_calc):
         pass
     def interpol_delta():
         pass
+
 
     def forces(self,
                 x0_ = None,
@@ -216,7 +244,6 @@ class Krylov_forces(Krylov_pre_calc):
                         # N =[input.loc[:, input_columns].values[0]],  # pod forces need to be time dependent, here only the first value is taken for testing
                         urx = x0_[3]
                     )
-
         return (
             kr_X + pox_X, 
             kr_Y + pod_Y, 
@@ -236,7 +263,7 @@ class Krylov_forces(Krylov_pre_calc):
 
     #------------------------------------------------------
     # Krylov Force
-
+    
     def krylov_force(self, x0_= None, sd: ShipConfig = None, beta_eff: float = None, beta_eff_sign: float = None):
         '''
         Ta = t aft
@@ -251,22 +278,13 @@ class Krylov_forces(Krylov_pre_calc):
             sd.Ta, sd.Tf = sd.Tm, sd.Tm 
             # später kann es auch aus dem mittleren Tiefgang und dem Trim aus dem IMU berechnet werden zu Fahrtantritt
 
-        
-
         Uchar = np.sqrt(x0_[3]**2 + x0_[4]**2) # speed
-    
-        print(f"Uchar: {Uchar}, u: {x0_[3]}, v: {x0_[4]}")
 
         Fn = Uchar / np.sqrt(sd.L * 9.81) # Froude number
 
         psi1 = (sd.Ta - sd.Tf) /sd.L # tangent ot static trim angle
 
-
-
         cx0 = self.get_cx0(sd=sd, ship_resistance=sd.ship_resistance, Uchar=Uchar)
-
-
-
 
         # beta_eff, beta_eff_sign = self.eff_drift_angle(x0) # self.beta_eff
         psi2 = self.calc_psi2(sd = sd, Fn = Fn, psi2p = self.psi2p)
@@ -298,7 +316,7 @@ class Krylov_forces(Krylov_pre_calc):
             cn * Umnos_cn * self.Corr_n            # corr_X
 
         )
-        
+    
     def get_cx0(self, sd: ShipConfig = None, ship_resistance = None, Uchar = None, ):
         # interpolate zerodrift resistance from resistance curve
         # print(ship_resistance)
@@ -317,7 +335,7 @@ class Krylov_forces(Krylov_pre_calc):
             return RTx0 / (sd.rho * Uchar**2 * sd.S)
         return RTx0 / (0.5 * sd.rho * Uchar**2 * sd.S) 
 
-
+    
     def eff_drift_angle(self, x0_, eps):
         
 
@@ -333,9 +351,7 @@ class Krylov_forces(Krylov_pre_calc):
 
 
         return beta_eff, sign
-
-
-
+    
     def calc_psi2(self, sd,  Fn,  psi2p):
         check = 0
         for fnr in psi2p.values():                      # fnr = Fn range
@@ -414,19 +430,13 @@ class Krylov_forces(Krylov_pre_calc):
         return c2, c3
 
     def calc_cy_beta(self, LB, TmL, cp, sigma, beta_eff, beta_eff_sign, c2, c3):
-        # print("hallo hier bin ich")
         for lb in self.cy_betap.values():
-            # print(f"LB: {LB}, {lb['r'][0]}, {lb['r'][1]}")
             if lb["r"][0] <= LB <= lb["r"][1]:
-                # print(f"lb sigma: {lb['sigma']}")
                 for sigmas in lb["sigma"].values():
-                    # print(f"sigma: {sigma}, {sigmas['r'][0]}, {sigmas['r'][1]}")
                     if sigmas["r"][0] is None and sigmas["r"][1] is None:
-                        # print("1")
                         a1 = coeffs(LB, *sigmas["a1"])
                         b1 = coeffs(LB, *sigmas["b1"])
                     elif sigmas["r"][0] <= sigma <= sigmas["r"][1]:
-                        # print("2")
                         a1 = coeffs(LB, *sigmas["a1"])
                         b1 = coeffs(LB, *sigmas["b1"])
 
@@ -551,7 +561,7 @@ class Krylov_forces(Krylov_pre_calc):
 
 
 
-    def calc_pod_forces(self, input: pd.DataFrame, input_columns: list, sd: ShipConfig, urx: float):
+    def calc_pod_forces(self, input: np.ndarray, input_columns: list, sd: ShipConfig, urx: float):
         # changed from original kryov code: each pod gets its own delta_r and therefore the forces and moments differ 
         # NOTE!!: pod thrust is first assmued to be in the rotating center of the pod. Later the effects of another lever arm can be added 
         # the pod forces are acting through the pod rotation center on the ship therefore no leverarm is assumed for either azipull or push thrusters
@@ -578,7 +588,10 @@ class Krylov_forces(Krylov_pre_calc):
         D_p = sd.D_p
         prop_openwater = sd.prop_openwater
 
-        N = input.loc[:, input_columns[:2]].values[0]/60
+        # print(f" input numpy: {input}")
+        N = input[:2]
+        # print(f" N: {N}")
+        # N = input.loc[:, input_columns[:2]].values[0]  /60
         Thr = [0.0] * len(N)
         # ------
         if len(Thr) == 1:
@@ -589,7 +602,6 @@ class Krylov_forces(Krylov_pre_calc):
         elif len(Thr) == 2:
             for i, n in enumerate(N):
                 J = (urx * (1- w))/ (n* D_p)
-                print(f"J: {J}, urx: {urx}, w: {w}, n: {n}, D_p: {D_p}")
                 Kt = np.interp(J, prop_openwater["J"], prop_openwater["KT"])
 
                 Thr[i] = Kt * sd.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
@@ -598,8 +610,8 @@ class Krylov_forces(Krylov_pre_calc):
             # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
             X_pod, Y_pod, N_pod = 0, 0, 0
             for i, T in enumerate(Thr):
-                X_pod = X_pod +T * math.cos(input.loc[:, f"delta_r{i}"].values[0])
-                Y_pod = Y_pod - T * math.sin(input.loc[:, f"delta_r{i}"].values[0])
+                X_pod = X_pod +T * math.cos(input[2+i])
+                Y_pod = Y_pod - T * math.sin(input[2+i])
                 if len(Thr) == 2:
                     # moment arm separation according to prop location added by Jelle 
                     dbh2 = {
@@ -609,13 +621,11 @@ class Krylov_forces(Krylov_pre_calc):
                     if lcg == 0: 
                         print("lcg = zero, please check ship_data.yml")
                     
-                    h = np.sqrt((lcg)**2 + dbh2**2)*math.sin(input.loc[:, f"delta_r{i}"].values[0] + math.atan(dbh2/lcg))
+                    h = np.sqrt((lcg)**2 + dbh2**2)*math.sin(input[2+i] + math.atan(dbh2/lcg))
                     N_pod = N_pod + T * h
         else:
             print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
             X_pod, Y_pod, N_pod = 0, 0, 0
-
-        print(f"Pod forces: X_pod: {X_pod}, Y_pod: {Y_pod}, N_pod: {N_pod}")
 
         return [X_pod, Y_pod, N_pod]
 
@@ -756,4 +766,12 @@ if __name__ == "__main__":
 
     df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
     
+    fig_2 = df.plot(x="x0", y="y0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
+    fig.update_yaxes(
+            scaleanchor="x",
+            scaleratio=1
+            )   
+    fig_2.show()
     print(df.head())
+
+
