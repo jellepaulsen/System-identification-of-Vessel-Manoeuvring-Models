@@ -251,8 +251,12 @@ class Krylov_forces(Krylov_pre_calc):
             sd.Ta, sd.Tf = sd.Tm, sd.Tm 
             # später kann es auch aus dem mittleren Tiefgang und dem Trim aus dem IMU berechnet werden zu Fahrtantritt
 
+        
 
         Uchar = np.sqrt(x0_[3]**2 + x0_[4]**2) # speed
+    
+        print(f"Uchar: {Uchar}, u: {x0_[3]}, v: {x0_[4]}")
+
         Fn = Uchar / np.sqrt(sd.L * 9.81) # Froude number
 
         psi1 = (sd.Ta - sd.Tf) /sd.L # tangent ot static trim angle
@@ -308,7 +312,7 @@ class Krylov_forces(Krylov_pre_calc):
             Uchar = 0.1
         elif Uchar > -0.1 and Uchar < 0:
             Uchar = -0.1
-        print(f"Uchar: {Uchar}, RTx0: {RTx0}")
+
         if sd.noh == 2:
             return RTx0 / (sd.rho * Uchar**2 * sd.S)
         return RTx0 / (0.5 * sd.rho * Uchar**2 * sd.S) 
@@ -410,19 +414,19 @@ class Krylov_forces(Krylov_pre_calc):
         return c2, c3
 
     def calc_cy_beta(self, LB, TmL, cp, sigma, beta_eff, beta_eff_sign, c2, c3):
-        print("hallo hier bin ich")
+        # print("hallo hier bin ich")
         for lb in self.cy_betap.values():
-            print(f"LB: {LB}, {lb['r'][0]}, {lb['r'][1]}")
+            # print(f"LB: {LB}, {lb['r'][0]}, {lb['r'][1]}")
             if lb["r"][0] <= LB <= lb["r"][1]:
-                print(f"lb sigma: {lb['sigma']}")
+                # print(f"lb sigma: {lb['sigma']}")
                 for sigmas in lb["sigma"].values():
-                    print(f"sigma: {sigma}, {sigmas['r'][0]}, {sigmas['r'][1]}")
+                    # print(f"sigma: {sigma}, {sigmas['r'][0]}, {sigmas['r'][1]}")
                     if sigmas["r"][0] is None and sigmas["r"][1] is None:
-                        print("1")
+                        # print("1")
                         a1 = coeffs(LB, *sigmas["a1"])
                         b1 = coeffs(LB, *sigmas["b1"])
                     elif sigmas["r"][0] <= sigma <= sigmas["r"][1]:
-                        print("2")
+                        # print("2")
                         a1 = coeffs(LB, *sigmas["a1"])
                         b1 = coeffs(LB, *sigmas["b1"])
 
@@ -510,8 +514,8 @@ class Krylov_forces(Krylov_pre_calc):
     def calc_cn_beta(self, cx0, beta_eff, m):
         beta = beta_eff
         cn_beta = m[0]*np.sin(2*beta)+m[1]*np.sin(beta)+m[2]*(np.sin(2*beta)**3) + m[3] * (np.sin(2*beta)**5)
-        if cx0/self.kp['a1x'] > 1 or cx0/self.kp['a1x'] < -1:
-            print(f"Invalid arcsin input: {cx0/self.kp['a1x']}, {cx0}, {self.kp['a1x']}")
+        # if cx0/self.kp['a1x'] > 1 or cx0/self.kp['a1x'] < -1:
+            # print(f"Invalid arcsin input: {cx0/self.kp['a1x']}, {cx0}, {self.kp['a1x']}")
 
         cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
         return cn_beta, cxb
@@ -574,7 +578,7 @@ class Krylov_forces(Krylov_pre_calc):
         D_p = sd.D_p
         prop_openwater = sd.prop_openwater
 
-        N = input.loc[:, input_columns[:2]].values[0]
+        N = input.loc[:, input_columns[:2]].values[0]/60
         Thr = [0.0] * len(N)
         # ------
         if len(Thr) == 1:
@@ -584,7 +588,8 @@ class Krylov_forces(Krylov_pre_calc):
             # to be coninued
         elif len(Thr) == 2:
             for i, n in enumerate(N):
-                J = urx * (1- w)/ (n* D_p)
+                J = (urx * (1- w))/ (n* D_p)
+                print(f"J: {J}, urx: {urx}, w: {w}, n: {n}, D_p: {D_p}")
                 Kt = np.interp(J, prop_openwater["J"], prop_openwater["KT"])
 
                 Thr[i] = Kt * sd.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
@@ -609,6 +614,8 @@ class Krylov_forces(Krylov_pre_calc):
         else:
             print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
             X_pod, Y_pod, N_pod = 0, 0, 0
+
+        print(f"Pod forces: X_pod: {X_pod}, Y_pod: {Y_pod}, N_pod: {N_pod}")
 
         return [X_pod, Y_pod, N_pod]
 
@@ -715,9 +722,12 @@ if __name__ == "__main__":
     # test_calc_rudder_forces_direct()
 
 
-    # pd.options.plotting.backend = "plotly"
+    pd.options.plotting.backend = "plotly"
     # fig = ship_resistance.plot(x="kn", y="kN", kind="line", title="Resistance Curve", labels={"kn": "Speed (knots)", "kN": "Resistance (kN)"})
+    fig = prop_openwater.plot(x="J", y="KT", kind="line", title="Resistance Curve", labels={"J": "J", "KT": "KT"})
     # fig.show()
+
+
 
     # kpc = Krylov_pre_calc(ship_parameters, krylov_parameters)
     # kpc.hydro_mass()
@@ -737,12 +747,13 @@ if __name__ == "__main__":
     })
 
     kf = Krylov_forces(krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater, data = data)
-    kf.hydromass()
+    kf.hydro_mass()
     # kf.sd.Fn = 0.50
     # kf.xtg = -0.03
     x0_ = [0,0,0,6,0,0]
 
+    # x, y, n = kf.forces(x0 = x0_, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
 
     df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
-    # x, y, n = kf.forces(x0 = x0_, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
+    
     print(df.head())

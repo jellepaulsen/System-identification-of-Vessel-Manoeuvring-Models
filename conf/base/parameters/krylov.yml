@@ -141,7 +141,7 @@ cy_beta:
         a1: [0, -0.5, -0.485]
         b1: [513.7, -1032, 523.7]
   lb_3:
-    r: [8, 11]
+    r: [8, 12] # changed from 11 to get results for bigger LB, bacouse the wlfa ship has LB = 11.8
     sigma:
       sgm_1:
         r: [0.93, 0.95]
