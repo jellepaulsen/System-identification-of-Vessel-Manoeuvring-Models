@@ -201,7 +201,7 @@ class Krylov_forces(Krylov_pre_calc):
         rhs_sym = rhs_sym.subs({
             m_x: self.hydro_mass_dict["m11"] + self.sd.m,
             m_y: self.hydro_mass_dict["m22"] + self.sd.m,
-            m_n: self.hydro_mass_dict["m66"] + self.sd.I_z
+            m_n: self.hydro_mass_dict["m66"] + self.hydro_mass_dict["izz"]
         })
 
         return rhs_sym
@@ -251,6 +251,8 @@ class Krylov_forces(Krylov_pre_calc):
 
         
         beta_eff, beta_eff_sign = self.eff_drift_angle(x0_, eps) # self.beta_eff
+
+        print(f"Calculating forces for state: {x0_}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
         # x0_ = self.wave_induced_velocities(x0_)
         kr_X, kr_Y, kr_N = self.krylov_force(x0_, sd, beta_eff, beta_eff_sign, eps)
         pox_X, pod_Y, pod_N = self.calc_pod_forces(
@@ -260,6 +262,8 @@ class Krylov_forces(Krylov_pre_calc):
                         # N =[input.loc[:, input_columns].values[0]],  # pod forces need to be time dependent, here only the first value is taken for testing
                         urx = x0_[3]
                     )
+        # print(f"Krylov forces: X_kr={kr_X:.2f} N, Y_kr={kr_Y:.2f} N, N_kr={kr_N:.2f} Nm")
+        # print(f"Pod forces: X_pod={pox_X:.2f} N, Y_pod={pod_Y:.2f} N, N_pod={pod_N:.2f} Nm")
         return (
             kr_X + pox_X, 
             kr_Y + pod_Y, 
@@ -527,6 +531,7 @@ class Krylov_forces(Krylov_pre_calc):
             omega_large = 1.0 
 
         cnom = -cn0*abs(x0_[5])* x0_[5]*L**2 - cnw/ np.pi*(Uchar**2 +(x0_[5]**2)*L**2)* np.sin(np.pi*omega_large)
+        
 
         cn = cnom +cn_beta*Uchar**2 # called cn
 
@@ -535,7 +540,8 @@ class Krylov_forces(Krylov_pre_calc):
         Umnos_cn = rho*Asigma*(Uchar**2)/2
         # print(f" Umnos_cn: {Umnos_cn}, {cn}, {self.Corr_x}")
 
-
+        print(f"cn: {cn}, cnom: {cnom}, cn_beta: {cn_beta}")
+        print(f" x {cxb * Umnos_fo     * self.Corr_x},Y: {cy_beta * Umnos_fo * self.Corr_y}, M: {cn * Umnos_cn * self.Corr_n }")
         # correction factor are different to the given krylov code. Original code is is deplayed afterwards
         return (
             cxb * Umnos_fo     * self.Corr_x,      # corr_n
@@ -565,17 +571,23 @@ class Krylov_forces(Krylov_pre_calc):
     
     def eff_drift_angle(self, x0_, eps):
         
-
-        if x0_[4] >= eps:
-            beta_eff = np.arctan(x0_[4]/x0_[3])
+        if abs(x0_[3]) < eps and abs(x0_[4]) < eps:
+            return 0.0, 0.0
+        
+        elif x0_[3] >= eps:
+            beta_eff = np.arctan2(x0_[4],x0_[3])
         else:
             beta_eff = np.pi/2 * np.where(x0_[4]>0, 1, -1)
 
         sign = np.where(beta_eff>0, 1, -1)
 
-        if x0_[5] < 0.0:
-            beta_eff = np.pi* sign
+        # was könnte das sein?
+        # if x0_[5] < 0.0:
+        #     beta_eff = np.pi* sign
 
+        if abs(beta_eff) < eps:
+            beta_eff = 0.0
+            sign = 0
 
         return beta_eff, sign
     
