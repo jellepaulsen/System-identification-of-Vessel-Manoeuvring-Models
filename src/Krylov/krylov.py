@@ -99,11 +99,17 @@ class Krylov_forces(Krylov_pre_calc):
         state_columns = state_columns
         sd = self.sd
         sd.prop_openwater = prop_openwater
-        sd.ship_resistance = ship_resistance
+        sd.ship_resistance = self.add_column(ship_resistance, 0.514444, "kn", "m/s")  # Convert kn to m/s
         # self.test(x0 = states.iloc[0].values, input = input, input_columns = input_columns, sd = sd, eps = self.eps)
 
     # def test(self, x0 = None, input = None, input_columns = None, sd: ShipConfig = None, eps = None):
     #     self.forces(x0 = x0, input = input, input_columns = input_columns, sd = sd, eps = eps)
+
+    def add_column(self, df: pd.DataFrame, factor: float, column: str, new_column: str):
+        df[new_column] = df[column] * factor
+        return df
+        
+
     def timer(func):
         def wrapper(*args, **kwargs):
             start_time = time()
@@ -141,7 +147,7 @@ class Krylov_forces(Krylov_pre_calc):
         rhs_func = sp.lambdify(rhs_input, rhs_sym, modules="numpy")
 
         # build interpolation fuctions 
-        # RT_interp = interp1d(sd.ship_resistance["kn"], sd.ship_resistance["kN"], kind="cubic", fill_value="extrapolate")
+        # RT_interp = interp1d(sd.ship_resistance["m/s"], sd.ship_resistance["kN"], kind="cubic", fill_value="extrapolate")
 
         rhs = self.make_rhs(rhs_func = rhs_func, 
                             input = input_data, 
@@ -252,7 +258,7 @@ class Krylov_forces(Krylov_pre_calc):
         
         beta_eff, beta_eff_sign = self.eff_drift_angle(x0_, eps) # self.beta_eff
 
-        print(f"Calculating forces for state: {x0_}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
+        # print(f"Calculating forces for state: {x0_}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
         # x0_ = self.wave_induced_velocities(x0_)
         kr_X, kr_Y, kr_N = self.krylov_force(x0_, sd, beta_eff, beta_eff_sign, eps)
         pox_X, pod_Y, pod_N = self.calc_pod_forces(
@@ -309,7 +315,7 @@ class Krylov_forces(Krylov_pre_calc):
 
         # cx0 = self.get_cx0(sd=sd, ship_resistance=sd.ship_resistance, Uchar=Uchar)
 
-        RTx0 = np.interp(Uchar, ship_resistance["kn"] , ship_resistance["kN"]) # interpolierter Widerstand bei speed Uchar
+        RTx0 = np.interp(Uchar, sd.ship_resistance["m/s"] , sd.ship_resistance["kN"]) # interpolierter Widerstand bei speed Uchar
         
         if sd.noh == 2:
             cx0 = RTx0 / (rho * Uchar**2 * sd.S)
@@ -540,8 +546,8 @@ class Krylov_forces(Krylov_pre_calc):
         Umnos_cn = rho*Asigma*(Uchar**2)/2
         # print(f" Umnos_cn: {Umnos_cn}, {cn}, {self.Corr_x}")
 
-        print(f"cn: {cn}, cnom: {cnom}, cn_beta: {cn_beta}")
-        print(f" x {cxb * Umnos_fo     * self.Corr_x},Y: {cy_beta * Umnos_fo * self.Corr_y}, M: {cn * Umnos_cn * self.Corr_n }")
+        # print(f"cn: {cn}, cnom: {cnom}, cn_beta: {cn_beta}")
+        # print(f" x {cxb * Umnos_fo     * self.Corr_x},Y: {cy_beta * Umnos_fo * self.Corr_y}, M: {cn * Umnos_cn * self.Corr_n }")
         # correction factor are different to the given krylov code. Original code is is deplayed afterwards
         return (
             cxb * Umnos_fo     * self.Corr_x,      # corr_n
@@ -999,7 +1005,7 @@ if __name__ == "__main__":
     kf.hydro_mass()
     # kf.sd.Fn = 0.50
     # kf.xtg = -0.03
-    x0_ = [0,0,0,6,0,0]
+    x0_ = [0,0,0,3,0,0]
 
     # x, y, n = kf.forces(x0 = x0_, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
 
