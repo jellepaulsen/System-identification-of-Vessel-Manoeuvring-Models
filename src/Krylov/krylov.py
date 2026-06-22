@@ -243,16 +243,16 @@ class Krylov_forces(Krylov_pre_calc):
 
         # sol = solve_ivp(rhs, t_span, data[state_columns].iloc[0].values, t_eval=t_eval, method='RK45')
 
-        profiler = cProfile.Profile()
-        profiler.enable()
+        # profiler = cProfile.Profile()
+        # profiler.enable()
         
         print("Starting integration...")
         sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='RK45')
         print("Integration completed.")
 
-        profiler.disable()
-        stats = pstats.Stats(profiler).sort_stats('cumtime')
-        stats.print_stats(10)  # Print top 10 functions by cumulative time
+        # profiler.disable()
+        # stats = pstats.Stats(profiler).sort_stats('cumtime')
+        # stats.print_stats(10)  # Print top 10 functions by cumulative time
 
         if not sol.success:
             print("Integration failed:", sol.message)
@@ -328,7 +328,9 @@ class Krylov_forces(Krylov_pre_calc):
         if x0_ is None:
             x0_ = input.iloc[0][input_columns].values()
 
-        
+        if x0_[3] > 10 or x0_[4] > 10:
+            print(f"blitzmeister")
+            return None, None, None
         # adding wave induced velocities to 
         # need to be added
 
@@ -348,7 +350,7 @@ class Krylov_forces(Krylov_pre_calc):
         # print(f"Krylov forces: X_kr={kr_X:.2f} N, Y_kr={kr_Y:.2f} N, N_kr={kr_N:.2f} Nm")
         # print(f"Pod forces: X_pod={pox_X:.2f} N, Y_pod={pod_Y:.2f} N, N_pod={pod_N:.2f} Nm")
 
-        # print(f"X: {kr_X}, {pox_X:.2f} N,\n Y: {kr_Y}, {pod_Y:.2f} N,\n N: {kr_N + pod_N:.2f} Nm")
+        print(f"X: {kr_X}, {pox_X:.2f} N, Y: {kr_Y}, {pod_Y:.2f} N, N: {kr_N + pod_N:.2f} Nm")
 
         
         return (
@@ -603,8 +605,11 @@ class Krylov_forces(Krylov_pre_calc):
         # cn_beta, cxb =  self.calc_cn_beta(cx0 = cx0, beta_eff= beta_eff, m= ms)
         cn_beta = ms[0]*np.sin(2*beta_eff)+ms[1]*np.sin(beta_eff)+ms[2]*(np.sin(2*beta_eff)**3) + ms[3] * (np.sin(2*beta_eff)**5)
 
+    
+
         cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta_eff)*180/np.pi/self.kp["psix"])))
 
+        print(f"cxb: {round(cxb, 5)}, beta_eff: {round(beta_eff, 5)}, cx0: {round(cx0, 5)}, uchar: {round(Uchar, 2)}, u: {round(x0_[3], 2)}, v: {round(x0_[4], 2)}, r: {round(x0_[5], 2)}")
 
         # print(f"cx0: {cx0}, cxb: {cxb}")
         # calc_cn
@@ -667,14 +672,12 @@ class Krylov_forces(Krylov_pre_calc):
     
     def eff_drift_angle(self, x0_, eps):
         
-        if abs(x0_[3]) < eps and abs(x0_[4]) < eps:
-            return 0.0, 0.0
-        
-        elif x0_[3] >= eps:
+        if abs(x0_[3]) > eps:
             beta_eff = np.arctan2(x0_[4],x0_[3])
         else:
             beta_eff = np.pi/2 * np.where(x0_[4]>0, 1, -1)
 
+        # print(f"beta_eff: {round(beta_eff*180/np.pi, 5)}")<Fuchar
         sign = np.where(beta_eff>0, 1, -1)
 
         # was könnte das sein?
