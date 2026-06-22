@@ -100,15 +100,35 @@ class Krylov_forces(Krylov_pre_calc):
         sd = self.sd
         sd.prop_openwater = prop_openwater
         sd.ship_resistance = self.add_column(ship_resistance, 0.514444, "kn", "m/s")  # Convert kn to m/s
+        sd.ship_resistance = self.add_ct(sd.ship_resistance, sd)
+
         # self.test(x0 = states.iloc[0].values, input = input, input_columns = input_columns, sd = sd, eps = self.eps)
 
     # def test(self, x0 = None, input = None, input_columns = None, sd: ShipConfig = None, eps = None):
     #     self.forces(x0 = x0, input = input, input_columns = input_columns, sd = sd, eps = eps)
 
+
+
+
+    def add_ct(self, df: pd.DataFrame, sd: ShipConfig):
+
+        
+        psi2 = self.calc_psi2(sd = sd, Fn = df["m/s"] / np.sqrt(sd.L * 9.81), psi2p = self.psi2p)
+        sigma, asigma = self.calc_sigma(sd = sd,psi1=0, psi2=psi2, Tm=sd.Tm, L=sd.L, askeg=sd.askeg, fr_i=sd.fr_i)
+        
+
+
+        if sd.noh == 2:
+            df["ct"] = df["kN"]*1000 / (sd.rho * df["m/s"]**2 * sd.S)
+            df["ct_kry"] = df["kN"]*1000 / (sd.rho * asigma * df["m/s"]**2)
+        else: 
+            df["ct"] = df["kN"] / (0.5 * sd.rho * sd.S * df["m/s"]**2)
+            df["ct_kry"] = df["kN"] / (0.5 * sd.rho * asigma * df["m/s"]**2)
+        return df
+
     def add_column(self, df: pd.DataFrame, factor: float, column: str, new_column: str):
         df[new_column] = df[column] * factor
         return df
-        
 
     def timer(func):
         def wrapper(*args, **kwargs):
@@ -315,13 +335,16 @@ class Krylov_forces(Krylov_pre_calc):
 
         # cx0 = self.get_cx0(sd=sd, ship_resistance=sd.ship_resistance, Uchar=Uchar)
 
-        RTx0 = np.interp(Uchar, sd.ship_resistance["m/s"] , sd.ship_resistance["kN"]) # interpolierter Widerstand bei speed Uchar
+        cx0 = np.interp(Uchar, sd.ship_resistance["m/s"] , sd.ship_resistance["ct"]) # interpolierter Widerstand bei speed Uchar
         
-        if sd.noh == 2:
-            cx0 = RTx0 / (rho * Uchar**2 * sd.S)
-        else:
-            cx0 = RTx0 / (0.5 * rho * Uchar**2 * sd.S)
+        # if sd.noh == 2:
+        #     cx0 = RTx0 / (rho * Uchar**2 * sd.S)
+        # else:
+        #     cx0 = RTx0 / (0.5 * rho * Uchar**2 * sd.S)
 
+        cx0 = np.clip(cx0, 0.0000000001, 0.075) # limit cx0 to avoid numerical issues, lower limit is arbitrary and can be adjusted based on expected range of cx0 values
+
+        # print(f"Interpolated resistance RT at speed {Uchar:.2f} m/s, cx0: {cx0:.4f}")
 
         # calc psi2
         check = 0
@@ -391,6 +414,9 @@ class Krylov_forces(Krylov_pre_calc):
         U = c2_a1 * sigma + c2_b1
 
         for U in self.c2p["U"].values():
+
+            # print(f"u0: {U['r'][0]}, u1: {U['r'][1]}, x0_3: {x0_[3]}")
+
             if U["r"][0] <= x0_[3] <= U["r"][1]:
                 c2_a2 = coeffs(x0_[3], *U["a2"])
                 c2_b2 = coeffs(x0_[3], *U["b2"])
@@ -472,8 +498,9 @@ class Krylov_forces(Krylov_pre_calc):
         # ----m2------
         ms[1] = np.maximum(-(np.log(1.023 * sigma))/ (11.6* sigma -9.29), -0.01)
 
-        # ----m3------ 
-        sigma = np.maximum(sigma, 1)
+        # ----m3------ NOTE!!!!: sigma is clipped therefore it changes the whole following code
+
+        sigma_m34 = np.minimum(sigma, 1)
 
         a1 = 31.26 -9.0146 * np.exp(0.066947* LB)
         b1 = 8.6245 * np.exp(0.071419* LB) - 32.26
@@ -481,7 +508,7 @@ class Krylov_forces(Krylov_pre_calc):
         a2 = (np.exp(8.20939* cp)* 0.7728*0.001-1.873)*0.001
         b2 = (np.exp(7.47893* cp)*0.4404 * 0.01+5.709)*0.01
 
-        UUUU = (a1 * sigma + b1)/ (sigma -1.029)
+        UUUU = (a1 * sigma_m34 + b1)/ (sigma_m34 -1.029)
 
         ms[2] = np.clip(a2 * UUUU + b2, 0.016, 0.054)
     
@@ -500,10 +527,10 @@ class Krylov_forces(Krylov_pre_calc):
         else:
             U0 = coeffs(cp, -216.7, 312.8, 108.51)
         
-        if sigma <= 0.96:
-            Ss = coeffs(sigma, 1900, -3696, 1796)
-        elif sigma > 0.96:
-            Ss = coeffs(sigma, 391.7, -810.4, 415.8)
+        if sigma_m34 <= 0.96:
+            Ss = coeffs(sigma_m34, 1900, -3696, 1796)
+        elif sigma_m34 > 0.96:
+            Ss = coeffs(sigma_m34, 391.7, -810.4, 415.8)
         
         UUUUU = U0 + Ss
         Su = 0.00827 * UUUUU - 0.017
@@ -517,14 +544,16 @@ class Krylov_forces(Krylov_pre_calc):
 
         cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta_eff)*180/np.pi/self.kp["psix"])))
 
+
+        # print(f"cx0: {cx0}, cxb: {cxb}")
         # calc_cn
         # cn = self.calc_cn(x0_= x0_, sd= sd, c2= c2, cn_beta= cn_beta, beta_eff= beta_eff, Tml= sd.TmL, sigma= sigma, LB= LB, Uchar= Uchar, eps= self.eps)
 
         cn0 = 0.059*c2
-        cnw2= (0.739 +8.7 * TmL)*(1.611*(sigma**2)-2.873*sigma+1.33)
+        cnw2= (0.739 +8.7 * TmL)*(1.611*(sigma_m34**2)-2.873*sigma_m34+1.33)
 
-        a1 = 0.09-cnw2 - 0.0033*(LB -7)-20*((TmL-0.005)**2)+ 0.4*(sigma-0.9)+ 0.05*(sd.CM-0.9)
-        a2 = 0.008*LB + 0.9 *(TmL -0.05) + 0.45*(sigma-0.955)
+        a1 = 0.09-cnw2 - 0.0033*(LB -7)-20*((TmL-0.005)**2)+ 0.4*(sigma_m34-0.9)+ 0.05*(sd.CM-0.9)
+        a2 = 0.008*LB + 0.9 *(TmL -0.05) + 0.45*(sigma_m34-0.955)
 
         cnw = cnw2 + a1 *abs(np.sin(beta_eff))+ a2 * (1-np.cos( (2*np.pi-4*abs(beta_eff))*np.cos(beta_eff)+0.1*abs(np.sin(2*beta_eff))))
 
@@ -540,19 +569,19 @@ class Krylov_forces(Krylov_pre_calc):
         
 
         cn = cnom +cn_beta*Uchar**2 # called cn
+        print(f"asigma: {Asigma}, sigma: {sigma}, s: {sd.S}")
 
-
-        Umnos_fo = rho*Asigma*L/2
-        Umnos_cn = rho*Asigma*(Uchar**2)/2
+        Umnos_cn = rho*Asigma*L/2
+        Umnos_fo = rho*Asigma*(Uchar**2)/2
         # print(f" Umnos_cn: {Umnos_cn}, {cn}, {self.Corr_x}")
 
         # print(f"cn: {cn}, cnom: {cnom}, cn_beta: {cn_beta}")
         # print(f" x {cxb * Umnos_fo     * self.Corr_x},Y: {cy_beta * Umnos_fo * self.Corr_y}, M: {cn * Umnos_cn * self.Corr_n }")
         # correction factor are different to the given krylov code. Original code is is deplayed afterwards
         return (
-            cxb * Umnos_fo     * self.Corr_x,      # corr_n
+            cxb * Umnos_fo     * self.Corr_n,      # corr_n
             cy_beta * Umnos_fo * self.Corr_y,      # corr_y
-            cn * Umnos_cn * self.Corr_n            # corr_X
+            cn * Umnos_cn * self.Corr_x            # corr_X
 
         )
     
@@ -1005,18 +1034,31 @@ if __name__ == "__main__":
     kf.hydro_mass()
     # kf.sd.Fn = 0.50
     # kf.xtg = -0.03
-    x0_ = [0,0,0,3,0,0]
+    x0_ = [0,0,0,2,0,0]
 
     # x, y, n = kf.forces(x0 = x0_, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
-
+    a, b, c , d, e, f =kf.equations()
+    print(f"{a}\n{b}\n{c}\n{d}\n{e}\n{f}")
     df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
     
     fig_2 = df.plot(x="x0", y="y0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
+    fig_3 = df.plot(x=df.index, y="u", kind="line", title="u", labels={"u": "u"})
     fig_2.update_yaxes(
             scaleanchor="x",
             scaleratio=1
             )   
+    fig_2.update_xaxes(constrain="domain")
+    fig_2.update_layout(
+        width=600,
+        height=600,
+        title={
+            'text': "Trajectory",
+            'y':0.9,
+            'x':0.5,
+            'xanchor': 'center',
+            'yanchor': 'top'})
     fig_2.show()
+    fig_3.show()
     print(df.head(-5))
 
 
