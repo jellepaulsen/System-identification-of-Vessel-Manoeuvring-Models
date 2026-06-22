@@ -24,6 +24,50 @@ def clean_input_vars(list_of_vars: list, state_columns: list, input_vars: list):
     return [x for i,x in enumerate(list_of_vars) if state_columns[i] in input_vars]
 
 
+def get_test_input(
+    h: float,
+    n: int,
+    N: float,
+    dt: float = 1.0,
+    delta_deg: float = 10.0,
+) -> pd.DataFrame:
+    """
+    Build simple zigzag test input with alternating rudder angles.
+
+    The rudder angle alternates between +delta_deg and -delta_deg every h seconds,
+    repeated n times. Both propellers use the same revolution N and both rudders
+    use the same deflection delta.
+    """
+    if h <= 0:
+        raise ValueError("h must be > 0")
+    if n <= 0:
+        raise ValueError("n must be > 0")
+    if dt <= 0:
+        raise ValueError("dt must be > 0")
+
+    rows = []
+    delta_rad = math.radians(delta_deg)
+    steps_per_leg = max(1, int(round(h / dt)))
+
+    for leg in range(n):
+        delta = delta_rad if leg % 2 == 0 else -delta_rad
+        for step in range(steps_per_leg):
+            t = leg * h + step * dt
+            rows.append(
+                {
+                    "time": t,
+                    "N0": N,
+                    "N1": N,
+                    "delta_r0": delta,
+                    "delta_r1": delta,
+                }
+            )
+
+    df = pd.DataFrame(rows).set_index("time")
+    df.index.name = "time"
+    return df
+
+
 class Krylov_pre_calc:    
     def __init__(self, ship_parameters: dict, krylov_parameters: dict):
         self.sd = ShipConfig(**ship_parameters)
@@ -111,19 +155,27 @@ class Krylov_forces(Krylov_pre_calc):
 
 
     def add_ct(self, df: pd.DataFrame, sd: ShipConfig):
-
+        psi1 = (sd.Ta - sd.Tf) /sd.L 
+        m = 1
+        if "kN" in df.columns:
+            m = 1000
         
-        psi2 = self.calc_psi2(sd = sd, Fn = df["m/s"] / np.sqrt(sd.L * 9.81), psi2p = self.psi2p)
-        sigma, asigma = self.calc_sigma(sd = sd,psi1=0, psi2=psi2, Tm=sd.Tm, L=sd.L, askeg=sd.askeg, fr_i=sd.fr_i)
-        
 
 
-        if sd.noh == 2:
-            df["ct"] = df["kN"]*1000 / (sd.rho * df["m/s"]**2 * sd.S)
-            df["ct_kry"] = df["kN"]*1000 / (sd.rho * asigma * df["m/s"]**2)
-        else: 
-            df["ct"] = df["kN"] / (0.5 * sd.rho * sd.S * df["m/s"]**2)
-            df["ct_kry"] = df["kN"] / (0.5 * sd.rho * asigma * df["m/s"]**2)
+        for idx, row in df.iterrows():
+
+            fn = row["m/s"] / np.sqrt(sd.L * 9.81)
+            psi2 = self.calc_psi2(sd = sd, Fn = fn, psi2p = self.psi2p)
+            x, asigma = self.calc_sigma(sd = sd,psi1=psi1, psi2=psi2, Tm=sd.Tm, L=sd.L, askeg=sd.askeg, fr_i=sd.fr_i)
+
+            if sd.noh == 2:
+                df.loc[idx, "ct"] = row["kN"]*m / (sd.rho * row["m/s"]**2 * sd.S)
+                df.loc[idx, "ct_kry"] = row["kN"]*m / (sd.rho * asigma * row["m/s"]**2)
+            else: 
+                df.loc[idx, "ct"] = row["kN"]*m / (0.5 * sd.rho * sd.S * row["m/s"]**2)
+                df.loc[idx, "ct_kry"] = row["kN"]*m / (0.5 * sd.rho * asigma * row["m/s"]**2)
+
+        print(df)
         return df
 
     def add_column(self, df: pd.DataFrame, factor: float, column: str, new_column: str):
@@ -202,6 +254,11 @@ class Krylov_forces(Krylov_pre_calc):
         stats = pstats.Stats(profiler).sort_stats('cumtime')
         stats.print_stats(10)  # Print top 10 functions by cumulative time
 
+        if not sol.success:
+            print("Integration failed:", sol.message)
+
+
+        print(F"psi: {sol.y[2, -20:]}\n u: {sol.y[3, -20:]}\n v: {sol.y[4, -20:]}\n r: {sol.y[5, -20:]}\n")
         df_sim = pd.DataFrame(sol.y.T, columns=state_columns, index=t_eval)
         return df_sim
     
@@ -290,6 +347,10 @@ class Krylov_forces(Krylov_pre_calc):
                     )
         # print(f"Krylov forces: X_kr={kr_X:.2f} N, Y_kr={kr_Y:.2f} N, N_kr={kr_N:.2f} Nm")
         # print(f"Pod forces: X_pod={pox_X:.2f} N, Y_pod={pod_Y:.2f} N, N_pod={pod_N:.2f} Nm")
+
+        # print(f"X: {kr_X}, {pox_X:.2f} N,\n Y: {kr_Y}, {pod_Y:.2f} N,\n N: {kr_N + pod_N:.2f} Nm")
+
+        
         return (
             kr_X + pox_X, 
             kr_Y + pod_Y, 
@@ -335,7 +396,7 @@ class Krylov_forces(Krylov_pre_calc):
 
         # cx0 = self.get_cx0(sd=sd, ship_resistance=sd.ship_resistance, Uchar=Uchar)
 
-        cx0 = np.interp(Uchar, sd.ship_resistance["m/s"] , sd.ship_resistance["ct"]) # interpolierter Widerstand bei speed Uchar
+        cx0 = np.interp(Uchar, sd.ship_resistance["m/s"] , sd.ship_resistance["ct_kry"]) # interpolierter Widerstand bei speed Uchar
         
         # if sd.noh == 2:
         #     cx0 = RTx0 / (rho * Uchar**2 * sd.S)
@@ -569,7 +630,7 @@ class Krylov_forces(Krylov_pre_calc):
         
 
         cn = cnom +cn_beta*Uchar**2 # called cn
-        print(f"asigma: {Asigma}, sigma: {sigma}, s: {sd.S}")
+        # print(f"asigma: {Asigma}, sigma: {sigma}, s: {sd.S}")
 
         Umnos_cn = rho*Asigma*L/2
         Umnos_fo = rho*Asigma*(Uchar**2)/2
@@ -579,9 +640,9 @@ class Krylov_forces(Krylov_pre_calc):
         # print(f" x {cxb * Umnos_fo     * self.Corr_x},Y: {cy_beta * Umnos_fo * self.Corr_y}, M: {cn * Umnos_cn * self.Corr_n }")
         # correction factor are different to the given krylov code. Original code is is deplayed afterwards
         return (
-            cxb * Umnos_fo     * self.Corr_n,      # corr_n
+            cxb * Umnos_fo     * self.Corr_x,      # corr_n
             cy_beta * Umnos_fo * self.Corr_y,      # corr_y
-            cn * Umnos_cn * self.Corr_x            # corr_X
+            cn * Umnos_cn * self.Corr_n            # corr_X
 
         )
     
@@ -627,24 +688,32 @@ class Krylov_forces(Krylov_pre_calc):
         return beta_eff, sign
     
     def calc_psi2(self, sd,  Fn,  psi2p):
-        check = 0
-        for fnr in psi2p.values():                      # fnr = Fn range
-            if fnr["fn"][0] <= Fn <= fnr["fn"][1]:
-                # print(f"fnr: {fnr.keys()}")
-                for xgr in fnr["xg"].values():
-                    if xgr["r"][0] <= sd.xtg <= xgr["r"][1]:
-                        a1 = coeffs(sd.xtg, *xgr["a1"])
-                        b1 = coeffs(sd.xtg, *xgr["b1"])
-                        c1 = coeffs(sd.xtg, *xgr["c1"])
-                        check += 1
-        if check == 1:
-            psi2 = coeffs(Fn, a1, b1, c1)
-            return psi2
-        else:
-            print(f"Fn: {Fn}, xtg: {sd.xtg}, check: {check}")
+        def calc_single(fn_value):
+            check = 0
+            for fnr in psi2p.values():                      # fnr = Fn range
+                if fnr["fn"][0] <= fn_value <= fnr["fn"][1]:
+                    for xgr in fnr["xg"].values():
+                        if xgr["r"][0] <= sd.xtg <= xgr["r"][1]:
+                            a1 = coeffs(sd.xtg, *xgr["a1"])
+                            b1 = coeffs(sd.xtg, *xgr["b1"])
+                            c1 = coeffs(sd.xtg, *xgr["c1"])
+                            check += 1
+            if check == 1:
+                return coeffs(fn_value, a1, b1, c1)
+
+            print(f"Fn: {fn_value}, xtg: {sd.xtg}, check: {check}")
             print("Fn or xg out of range for psi2 calculation")
             print("If check > 1 then multiple ranges are overlapping CODE INCORRECT")
             return 0.0
+
+        if np.isscalar(Fn):
+            return calc_single(Fn)
+
+        if isinstance(Fn, pd.Series):
+            return Fn.apply(calc_single)
+
+        Fn_array = np.asarray(Fn)
+        return np.array([calc_single(fn_value) for fn_value in Fn_array])
 
 
     def calc_sigma(self, sd, psi1, psi2, Tm, L, askeg, fr_i):
@@ -1034,13 +1103,20 @@ if __name__ == "__main__":
     kf.hydro_mass()
     # kf.sd.Fn = 0.50
     # kf.xtg = -0.03
-    x0_ = [0,0,0,2,0,0]
+    x0_ = [0,0,0,3.6,0,0]
 
     # x, y, n = kf.forces(x0 = x0_, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
     a, b, c , d, e, f =kf.equations()
     print(f"{a}\n{b}\n{c}\n{d}\n{e}\n{f}")
     df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
     
+
+
+
+
+
+
+
     fig_2 = df.plot(x="x0", y="y0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
     fig_3 = df.plot(x=df.index, y="u", kind="line", title="u", labels={"u": "u"})
     fig_2.update_yaxes(
@@ -1059,6 +1135,4 @@ if __name__ == "__main__":
             'yanchor': 'top'})
     fig_2.show()
     fig_3.show()
-    print(df.head(-5))
-
-
+    print(df.head(-50))
