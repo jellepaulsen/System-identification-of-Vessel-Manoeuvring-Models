@@ -247,7 +247,7 @@ class Krylov_forces(Krylov_pre_calc):
         # profiler.enable()
         
         print("Starting integration...")
-        sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='RK45')
+        sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='Radau')
         print("Integration completed.")
 
         # profiler.disable()
