@@ -328,7 +328,7 @@ class Krylov_forces(Krylov_pre_calc):
         if x0_ is None:
             x0_ = input.iloc[0][input_columns].values()
 
-        if x0_[3] > 10 or x0_[4] > 10:
+        if x0_[3] > 20 or x0_[4] > 20:
             print(f"blitzmeister")
             return None, None, None
         # adding wave induced velocities to 
@@ -350,7 +350,10 @@ class Krylov_forces(Krylov_pre_calc):
         # print(f"Krylov forces: X_kr={kr_X:.2f} N, Y_kr={kr_Y:.2f} N, N_kr={kr_N:.2f} Nm")
         # print(f"Pod forces: X_pod={pox_X:.2f} N, Y_pod={pod_Y:.2f} N, N_pod={pod_N:.2f} Nm")
 
-        print(f"X: {kr_X}, {pox_X:.2f} N, Y: {kr_Y}, {pod_Y:.2f} N, N: {kr_N + pod_N:.2f} Nm")
+        print(f"X: {kr_X}, {pox_X:.2f} N, Y: {kr_Y}, {pod_Y:.2f} N, N: {kr_N}, {pod_N:.2f} Nm")
+
+
+
 
         
         return (
@@ -501,6 +504,7 @@ class Krylov_forces(Krylov_pre_calc):
             c3_b1 = coeffs(cp, 0, 10.08, 20.34)
 
         U_1 = c3_a1 * LB + c3_b1
+        # print(f"c3: {c3_a2, U_1, c3_b2}")
         c3 = np.clip(c3_a2 * U_1 + c3_b2, 0.0, 0.35)
 
 
@@ -528,8 +532,21 @@ class Krylov_forces(Krylov_pre_calc):
         Q = a2 * U_2 + b2
 
         cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 0.5)
-        cy_beta = 0.5* cy_beta_2 * np.sin(2.* beta_eff)* np.cos(beta_eff) + (c2*(np.sin(beta_eff)**2))+ c3*(np.sin(2*beta_eff)**4)* beta_eff_sign
+        cy_beta = 0.5* cy_beta_2 * np.sin(2.* beta_eff)* np.cos(beta_eff) + (c2*(np.sin(beta_eff)**2)+ c3*(np.sin(2*beta_eff)**4))* beta_eff_sign
+        
+        term1 = cy_beta_2 * np.sin(2*beta_eff) * np.cos(beta_eff)
+        term2_mag = c2 * np.sin(beta_eff)**2 + c3 * np.sin(2*beta_eff)**4
+        term2 = term2_mag * beta_eff_sign
 
+        print(
+            f"beta_eff={beta_eff}, "
+            f"np.sign(beta_eff)={np.sign(beta_eff)}, "
+            f"beta_eff_sign={beta_eff_sign}, "
+            f"term1={term1}, term2_mag={term2_mag}, term2={term2}, "
+            f"cy_beta={term1 + term2}"
+)
+
+        # print(f"cy_beta: {cy_beta}, c2: {c2}, c3: {c3}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
         # calc ms
 
         # ms = self.calc_ms(TmL= sd.TmL, sigma= sigma, LB= sd.LB, cp= sd.cp)
@@ -637,7 +654,7 @@ class Krylov_forces(Krylov_pre_calc):
         cn = cnom +cn_beta*Uchar**2 # called cn
         # print(f"asigma: {Asigma}, sigma: {sigma}, s: {sd.S}")
 
-        Umnos_cn = rho*Asigma*L/2
+        Umnos_cn = rho*Asigma*L/2 
         Umnos_fo = rho*Asigma*(Uchar**2)/2
         # print(f" Umnos_cn: {Umnos_cn}, {cn}, {self.Corr_x}")
 
@@ -646,7 +663,7 @@ class Krylov_forces(Krylov_pre_calc):
         # correction factor are different to the given krylov code. Original code is is deplayed afterwards
         return (
             cxb * Umnos_fo     * self.Corr_x,      # corr_n
-            cy_beta * Umnos_fo * self.Corr_y,      # corr_y
+            -cy_beta * Umnos_fo * self.Corr_y,      # corr_y # sign changes to match inertial NED cos
             cn * Umnos_cn * self.Corr_n            # corr_X
 
         )
@@ -686,7 +703,7 @@ class Krylov_forces(Krylov_pre_calc):
 
         if abs(beta_eff) < eps:
             beta_eff = 0.0
-            sign = 0
+            sign = 1
 
         return beta_eff, sign
     
