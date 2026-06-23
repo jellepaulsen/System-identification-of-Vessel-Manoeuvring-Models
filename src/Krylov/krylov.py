@@ -336,6 +336,7 @@ class Krylov_forces(Krylov_pre_calc):
 
         
         beta_eff, beta_eff_sign = self.eff_drift_angle(x0_, eps) # self.beta_eff
+        print(f"u: {x0_[3]}, v: {x0_[4]}, r: {x0_[5]}, beta_eff: {beta_eff}")
 
         # print(f"Calculating forces for state: {x0_}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
         # x0_ = self.wave_induced_velocities(x0_)
@@ -358,8 +359,8 @@ class Krylov_forces(Krylov_pre_calc):
         
         return (
             kr_X + pox_X, 
-            kr_Y + pod_Y, 
-            kr_N + pod_N
+            kr_Y +pod_Y, 
+            kr_N +pod_N
         )
 
     
@@ -372,6 +373,8 @@ class Krylov_forces(Krylov_pre_calc):
         x0_[3] = x0_[3] + ucx 
         x0_[4] = x0_[4] + ucy 
         return x0_
+
+
 
     #------------------------------------------------------
     # Krylov Force
@@ -538,13 +541,13 @@ class Krylov_forces(Krylov_pre_calc):
         term2_mag = c2 * np.sin(beta_eff)**2 + c3 * np.sin(2*beta_eff)**4
         term2 = term2_mag * beta_eff_sign
 
-        print(
-            f"beta_eff={beta_eff}, "
-            f"np.sign(beta_eff)={np.sign(beta_eff)}, "
-            f"beta_eff_sign={beta_eff_sign}, "
-            f"term1={term1}, term2_mag={term2_mag}, term2={term2}, "
-            f"cy_beta={term1 + term2}"
-)
+#         print(
+#             f"beta_eff={beta_eff}, "
+#             f"np.sign(beta_eff)={np.sign(beta_eff)}, "
+#             f"beta_eff_sign={beta_eff_sign}, "
+#             f"term1={term1}, term2_mag={term2_mag}, term2={term2}, "
+#             f"cy_beta={term1 + term2}"
+# )
 
         # print(f"cy_beta: {cy_beta}, c2: {c2}, c3: {c3}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
         # calc ms
@@ -663,7 +666,7 @@ class Krylov_forces(Krylov_pre_calc):
         # correction factor are different to the given krylov code. Original code is is deplayed afterwards
         return (
             cxb * Umnos_fo     * self.Corr_x,      # corr_n
-            -cy_beta * Umnos_fo * self.Corr_y,      # corr_y # sign changes to match inertial NED cos
+            - cy_beta * Umnos_fo * self.Corr_y,      # corr_y # sign changes to match inertial NED cos
             cn * Umnos_cn * self.Corr_n            # corr_X
 
         )
@@ -951,8 +954,21 @@ class Krylov_forces(Krylov_pre_calc):
         D_p = sd.D_p
         prop_openwater = sd.prop_openwater
 
-        # print(f" input numpy: {input}")
-        N = input[:2]/60
+        if isinstance(input, pd.DataFrame):
+            input_values = input.loc[:, input_columns].iloc[0].to_numpy(dtype=float)
+        elif isinstance(input, pd.Series):
+            input_values = input.loc[input_columns].to_numpy(dtype=float)
+        else:
+            input_values = np.asarray(input, dtype=float)
+
+        input_values = np.ravel(input_values)
+        if input_values.size < 4:
+            raise ValueError(
+                f"calc_pod_forces expected at least 4 input values, got {input_values.size}"
+            )
+
+        # print(f" input numpy: {input_values}")
+        N = input_values[:2] / 60
         # print(f" N: {N}")
         # N = input.loc[:, input_columns[:2]].values[0]  /60
         Thr = [0.0] * len(N)
@@ -966,6 +982,7 @@ class Krylov_forces(Krylov_pre_calc):
             for i, n in enumerate(N):
                 J = (urx * (1- w))/ (n* D_p)
                 Kt = np.interp(J, prop_openwater["J"], prop_openwater["KT"])
+                print(f"pod {i}, J: {J}, Kt: {Kt}")
 
                 Thr[i] = Kt * sd.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
         
@@ -973,8 +990,10 @@ class Krylov_forces(Krylov_pre_calc):
             # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
             X_pod, Y_pod, N_pod = 0, 0, 0
             for i, T in enumerate(Thr):
-                X_pod = X_pod +T * math.cos(input[2+i])
-                Y_pod = Y_pod - T * math.sin(input[2+i])
+                X_pod = X_pod +T * math.cos(input_values[2+i])
+                # Y_pod = Y_pod - T * math.sin(input[2+i])
+                Y_pod = Y_pod + T * math.sin(input_values[2+i])
+                
                 if len(Thr) == 2:
                     # moment arm separation according to prop location added by Jelle 
                     dbh2 = {
@@ -984,18 +1003,27 @@ class Krylov_forces(Krylov_pre_calc):
                     if lcg == 0: 
                         print("lcg = zero, please check ship_data.yml")
                     
-                    h = np.sqrt((lcg)**2 + dbh2**2)*math.sin(input[2+i] + math.atan(dbh2/lcg))
+                    h = np.sqrt((lcg)**2 + dbh2**2)*math.sin(input_values[2+i] + math.atan(dbh2/lcg))
                     N_pod = N_pod + T * h
+                print(f"pod {i}, T: {T}, delta: {input_values[2+i]}, X_pod: {X_pod}, Y_pod: {T*math.sin(input_values[2+i])}, N_pod: {T * h}")
         else:
             print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
             X_pod, Y_pod, N_pod = 0, 0, 0
 
         return [X_pod, Y_pod, N_pod]
 
-    def calc_windforces(self):
-        # to be implemented
-        pass
-        
+    def calc_windforces(self, uwind, wind_dir, rho_air, Ax, Ay, L, x0_, cxw = 0, cyw = 0, cnw = 0):
+        # need to add boundary effekts for wind forces 
+               
+        # relative windspeeds
+        urx = - x0_[3] + uwind* math.cos(x0_[2]-wind_dir)
+        ury = - x0_[4] + uwind* math.sin(x0_[2]-wind_dir)
+
+        f_wind_x = cxw * 0.5 * rho_air * urx * abs(urx) * Ax
+        f_wind_y = -cyw * 0.5 * rho_air * ury * abs(ury) * Ay
+        f_wind_n = cnw * 0.5 * rho_air * urx * abs(urx) * L
+
+        return f_wind_x, f_wind_y, f_wind_n
 
 #--------------------------------------------------
 # test written by copilot to check the rudder force calculation in isolation from the rest of the code.
@@ -1129,30 +1157,32 @@ if __name__ == "__main__":
     a, b, c , d, e, f =kf.equations()
     print(f"{a}\n{b}\n{c}\n{d}\n{e}\n{f}")
     df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
-    
+    x,y,n= kf.calc_pod_forces([400, 400, np.pi/4, np.pi/4], ["N0", "N1", "delta_r0", "delta_r1"], kf.sd, 3)
+
+    print("pod: ",x,y,n)
 
 
 
 
 
-
-
-    fig_2 = df.plot(x="x0", y="y0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
-    fig_3 = df.plot(x=df.index, y="u", kind="line", title="u", labels={"u": "u"})
-    fig_2.update_yaxes(
-            scaleanchor="x",
-            scaleratio=1
-            )   
-    fig_2.update_xaxes(constrain="domain")
-    fig_2.update_layout(
-        width=600,
-        height=600,
-        title={
-            'text': "Trajectory",
-            'y':0.9,
-            'x':0.5,
-            'xanchor': 'center',
-            'yanchor': 'top'})
-    fig_2.show()
-    fig_3.show()
+    # fig_2 = df.plot(x="x0", y="y0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
+    # fig_3 = df.plot(x=df.index, y="u", kind="line", title="u", labels={"u": "u"})
+    # fig_4 = df.plot(x=df.index, y="psi", kind="line", title="psi", labels={"psi": "psi"})
+    # fig_2.update_yaxes(
+    #         scaleanchor="x",
+    #         scaleratio=1
+    #         )   
+    # fig_2.update_xaxes(constrain="domain")
+    # fig_2.update_layout(
+    #     width=600,
+    #     height=600,
+    #     title={
+    #         'text': "Trajectory",
+    #         'y':0.9,
+    #         'x':0.5,
+    #         'xanchor': 'center',
+    #         'yanchor': 'top'})
+    # fig_2.show()
+    # fig_3.show()
+    # fig_4.show()
     print(df.head(-50))
