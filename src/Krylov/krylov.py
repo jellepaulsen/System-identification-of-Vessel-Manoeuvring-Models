@@ -1,6 +1,6 @@
 import pstats
 from time import time
-
+from plot.plot import *
 import numpy as np
 import math
 import pandas as pd
@@ -1158,19 +1158,16 @@ if __name__ == "__main__":
     a, b, c , d, e, f =kf.equations()
     print(f"{a}\n{b}\n{c}\n{d}\n{e}\n{f}")
     df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
-    x,y,n= kf.calc_pod_forces([400, 400, np.pi/4, np.pi/4], ["N0", "N1", "delta_r0", "delta_r1"], kf.sd, 3)
+    df.reset_index(inplace=True)
+    df_plot = TelemetryPlotter(df, t_unit="s", timecolumn="index", relative_time=True, sensor=False)
 
-    print("pod: ",x,y,n)
 
-    fig, ax = plt.subplots()          # Figure (Fenster) und Axes (Zeichenfläche) erstellen
+    df_plot.plot_track(start= 0, end = 1e90, lat_col= "y0", lon_col= "x0", figsize= (12, 8), invert_y= True)
+    # def __init__(self, df: pd.DataFrame, t_unit: str = "ns", timecolumn: str = "timestamp_ns", relative_time: bool = False, sensor: bool = True)
 
-    ax.plot(df["y0"], df["x0"])                     # Daten plotten
+    
 
-    ax.set_title("trajectory")             # Titel
-    ax.set_xlabel("east")          # Achsenbeschriftungen
-    ax.set_ylabel("north")
 
-    plt.show()   
 
     # fig_2 = df.plot(x="y0", y="x0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
     # fig_3 = df.plot(x=df.index, y="u", kind="line", title="u", labels={"u": "u"})
