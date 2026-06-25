@@ -18,7 +18,7 @@ def calculate_sog(
     sog = pd.Series(np.nan, index=df.index, name="sog_mps")
 
     if source == "gps":
-        data = df[["timestamp_ns", lat_col, lon_col]].dropna().sort_values("timestamp_ns")
+        data = df[["_dt_used", lat_col, lon_col]].dropna().sort_values("_dt_used")
         if data.empty:
             return sog
         lat = np.radians(data[lat_col].to_numpy())
@@ -29,15 +29,15 @@ def calculate_sog(
         a = np.sin(dlat / 2) ** 2 + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(dlon / 2) ** 2
         a = np.clip(a, 0, 1)
         distance = 2 * 6_371_000 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-        dt = np.diff(data["timestamp_ns"].to_numpy()) / 1e9
+        dt = np.diff(data["_dt_used"].to_numpy()) / 1e9
         speed = np.divide(distance, dt, out=np.full_like(distance, np.nan), where=dt > 0)
         sog.loc[data.index] = np.r_[np.nan, speed]
 
     elif source == "imu":
-        data = df[["timestamp_ns", ax_col, ay_col]].dropna().sort_values("timestamp_ns")
+        data = df[["_dt_used", ax_col, ay_col]].dropna().sort_values("_dt_used")
         if data.empty:
             return sog
-        dt = np.diff(data["timestamp_ns"].to_numpy(), prepend=data["timestamp_ns"].iloc[0]) / 1e9
+        dt = np.diff(data["_dt_used"].to_numpy(), prepend=data["_dt_used"].iloc[0]) / 1e9
         vx = np.cumsum(data[ax_col].to_numpy() * dt)
         vy = np.cumsum(data[ay_col].to_numpy() * dt)
         sog.loc[data.index] = np.hypot(vx, vy)
@@ -75,6 +75,33 @@ class TelemetryPlotter:
         "rate_of_turn": {"color": "#c5b0d5", "linestyle": "-", "linewidth": 1.5},
     }
     
+
+
+    def __init__(self, df: pd.DataFrame, t_unit: str = "ns", timecolumn: str = "timestamp_ns", relative_time: bool = False, sensor: bool = True):
+        """
+        df must have a 'timestamp_ns' column in nanoseconds (Unix epoch)
+        and latitude/longitude columns.
+        """
+        self.df = df.copy()
+        if relative_time:
+            if t_unit == "ns":
+                self.df["_dt"] = self.df[timecolumn] - self.df[timecolumn].min()
+            if t_unit == "s":
+                self.df["_dt"] = (self.df[timecolumn] - self.df[timecolumn].min()) * 1e9
+                print(self.df["_dt"].head())
+        else:
+            if t_unit == "ns":
+                self.df["_dt"] = pd.to_datetime(self.df[timecolumn], unit="ns", utc=True)
+            if t_unit == "s":
+                self.df["_dt"] = pd.to_datetime(self.df[timecolumn], unit="s", utc=True) 
+
+            #auf zeitstempel ändern
+        if sensor:
+            self.df["_dt_used"] = self.df["_dt"].dt.tz_convert("Europe/Amsterdam")
+        else:
+            self.df["_dt_used"] = self.df["_dt"]
+
+
     @staticmethod
     def clamp(arr, min_val=None, max_val=None):
         """
@@ -90,14 +117,6 @@ class TelemetryPlotter:
     
     
 
-    def __init__(self, df: pd.DataFrame):
-        """
-        df must have a 'timestamp_ns' column in nanoseconds (Unix epoch)
-        and latitude/longitude columns.
-        """
-        self.df = df.copy()
-        self.df["_dt"] = pd.to_datetime(self.df["timestamp_ns"], unit="ns", utc=True)
-        self.df["_dt_local"] = self.df["_dt"].dt.tz_convert("Europe/Amsterdam")
         
     def _to_utc(self, ts_str: str) -> str:
         """
@@ -117,10 +136,17 @@ class TelemetryPlotter:
         dt = datetime.strptime(ts_str_utc, self.DATE_FMT)
         return pd.Timestamp(dt, tz="UTC")
 
-    def _filter_window(self, start: str, end: str) -> pd.DataFrame:
-        t0 = self._parse_ts(start)
-        t1 = self._parse_ts(end)
-        mask = (self.df["_dt"] >= t0) & (self.df["_dt"] <= t1)
+    def _filter_window(self, start, end) -> pd.DataFrame:
+        if isinstance(start, str) and isinstance(end, str):
+            t0 = self._parse_ts(start)
+            t1 = self._parse_ts(end)
+            mask = (self.df["_dt"] >= t0) & (self.df["_dt"] <= t1)
+        else:
+            t0 = float(0)
+            t1 = float(1.0e50)
+            print(f"type: {type(start)}, {type(self.df['_dt'].iloc[0])}")
+            mask = (self.df["_dt"] >= t0) & (self.df["_dt"] <= t1)
+        print(f"Filtering window: {t0} → {t1}, rows selected.")
         return self.df.loc[mask]
 
     def _clean_nans(self, df_subset: pd.DataFrame, cols: list | str) -> pd.DataFrame:
@@ -269,9 +295,10 @@ class TelemetryPlotter:
         end   : str  – e.g. "22.04.2026:09:30:00"
         lat_col, lon_col : column names in the DataFrame
         figsize : tuple – tuple specifying the figure size (width, height)
+
         """
         subset = self._filter_window(start, end)
-        print(f"start unix: {subset['timestamp_ns'].min()}  →  {subset['_dt'].min()}")
+        # print(f"start unix: {subset['timestamp_ns'].min()}  →  {subset['_dt'].min()}")
         if subset.empty:
             print(f"No data in window {start} – {end}")
             return
@@ -281,7 +308,7 @@ class TelemetryPlotter:
             print(f"No valid coordinate data in window {start} – {end}")
             return
 
-        t = valid_data["timestamp_ns"].astype(float)
+        t = valid_data["_dt_used"].astype(float)
         t_norm = (t - t.min()) / (t.max() - t.min()) if t.max() > t.min() else t * 0
 
         _, ax = plt.subplots(figsize=figsize)
@@ -342,7 +369,7 @@ class TelemetryPlotter:
                     
                     # Verwende Styling aus COLUMN_STYLE Dictionary
                     style = self.COLUMN_STYLE.get(col, {})
-                    ax.plot(valid_data["_dt_local"], y, label=col, **style)
+                    ax.plot(valid_data["_dt_used"], y, label=col, **style)
                 else:
                     print(f"Warning: Only NaN values for '{col}' in given window.")
             else:
@@ -396,7 +423,7 @@ class TelemetryPlotter:
             
             # Verwende Styling aus COLUMN_STYLE Dictionary
             style = self.COLUMN_STYLE.get(col, {})
-            ax.plot(valid["_dt_local"], y, label=col, **style)
+            ax.plot(valid["_dt_used"], y, label=col, **style)
 
         ax.set_xlabel("Time")
         ax.set_ylabel(", ".join(main_cols))
@@ -416,7 +443,7 @@ class TelemetryPlotter:
                     ax2 = ax.twinx()
                     # Verwende Styling aus COLUMN_STYLE Dictionary
                     style = self.COLUMN_STYLE.get(twin_col, {"linestyle": "--", "color": "black"})
-                    ax2.plot(valid["_dt_local"], y, label=twin_col, **style)
+                    ax2.plot(valid["_dt_used"], y, label=twin_col, **style)
                     ax2.set_ylabel(twin_col)
                     h2, l2 = ax2.get_legend_handles_labels()
                     handles += h2
@@ -461,9 +488,9 @@ class TelemetryPlotter:
             # Verwende Styling aus COLUMN_STYLE Dictionary
             style = self.COLUMN_STYLE.get(col, {})
             if scatter:
-                ax.scatter(valid_data["_dt_local"], y, label=col, s=10, alpha=0.8, **{k: v for k, v in style.items() if k in ['color']})
+                ax.scatter(valid_data["_dt_used"], y, label=col, s=10, alpha=0.8, **{k: v for k, v in style.items() if k in ['color']})
             else:
-                ax.plot(valid_data["_dt_local"], y, label=col, **style)
+                ax.plot(valid_data["_dt_used"], y, label=col, **style)
 
         ax.set_xlabel("Time")
         ax.set_ylabel("Azimuth [°]")
@@ -544,7 +571,7 @@ class TelemetryPlotter:
                     
                     # Verwende Styling aus COLUMN_STYLE Dictionary, oder Defaults
                     style = self.COLUMN_STYLE.get(col, {"linestyle": "-", "linewidth": 1.5})
-                    _plot_series(ax, valid_data["_dt_local"], y, label=f"{col}", **style)
+                    _plot_series(ax, valid_data["_dt_used"], y, label=f"{col}", **style)
                 else:
                     print(f"Warning: Only NaN values for '{col}' in given window.")
             else:
@@ -560,7 +587,7 @@ class TelemetryPlotter:
                 style = self.COLUMN_STYLE.get(heading_col, {"linestyle": "--", "linewidtfh": 2.0})
                 _plot_series(
                     ax,
-                    valid_heading["_dt_local"],
+                    valid_heading["_dt_used"],
                     y,
                     label=f"Heading Change ({heading_col})",
                     **style
@@ -577,7 +604,10 @@ class TelemetryPlotter:
         ax.set_title(f"{title}  {start}  →  {end}")
         
         # Dynamische Skalierung basierend auf der Zeitfenster-Länge (in Minuten)
-        duration_mins = (self._parse_ts(end) - self._parse_ts(start)).total_seconds() / 60.0
+        if isinstance(start, str) and isinstance(end, str):
+            duration_mins = (self._parse_ts(end) - self._parse_ts(start)).total_seconds() / 60.0
+        else:
+            duration_mins = (end - start) / 6e10
         if duration_mins <= 3:
             ax.xaxis.set_major_locator(mdates.SecondLocator(bysecond=[0, 30]))
         elif duration_mins <= 5:
@@ -602,7 +632,7 @@ class TelemetryPlotter:
                 ax2 = ax.twinx()
                 # Verwende Styling aus COLUMN_STYLE Dictionary
                 style = self.COLUMN_STYLE.get(rot_col, {"color": "black", "linestyle": ":"})
-                _plot_series(ax2, valid_rot["_dt_local"], y_rot, label=f"ROT ({rot_col})", **style)
+                _plot_series(ax2, valid_rot["_dt_used"], y_rot, label=f"ROT ({rot_col})", **style)
                 ax2.set_ylabel("Rate of Turn [°/min]")
                 
                 # Synchronisiere Nullpunkte zwischen Hauptachse und ROT-Achse
@@ -798,7 +828,7 @@ class TelemetryPlotter:
                         valid_data[col] = ((valid_data[col] - zero_point + 180) % 360) - 180
                         y = self.clamp(valid_data[col], clamp_min, clamp_max)
                         style = self.COLUMN_STYLE.get(col, {"linestyle": "-", "linewidth": 1.5})
-                        _plot_series(ax, valid_data["_dt_local"], y, label=col, **style)
+                        _plot_series(ax, valid_data["_dt_used"], y, label=col, **style)
 
             # Plot Heading Change
             if heading_col and heading_col in subset.columns:
@@ -809,7 +839,7 @@ class TelemetryPlotter:
                     style = self.COLUMN_STYLE.get(heading_col, {"linestyle": "--", "linewidth": 2.0})
                     _plot_series(
                         ax,
-                        valid_heading["_dt_local"],
+                        valid_heading["_dt_used"],
                         y,
                         label=f"Heading ({heading_col})",
                         **style
@@ -823,7 +853,7 @@ class TelemetryPlotter:
                     y_rot = self.clamp(valid_rot[rot_col], rot_clamp_min, rot_clamp_max)
                     ax2 = ax.twinx()
                     style = self.COLUMN_STYLE.get(rot_col, {"color": "black", "linestyle": ":"})
-                    _plot_series(ax2, valid_rot["_dt_local"], y_rot, label=f"ROT", **style)
+                    _plot_series(ax2, valid_rot["_dt_used"], y_rot, label=f"ROT", **style)
                     
                     # Synchronisiere ROT-Achse (symmetrisch wie Hauptachse)
                     rot_range = max(abs(y_rot.min()), abs(y_rot.max())) if len(y_rot) > 0 else 1
