@@ -6,6 +6,8 @@ import math
 import pandas as pd
 import sympy as sp
 import yaml 
+import matplotlib
+matplotlib.use('QtAgg')  # kein GUI-Fenster, nur Dateien speichern
 import matplotlib.pyplot as plt
 import cProfile
 
@@ -297,7 +299,6 @@ class Krylov_forces(Krylov_pre_calc):
             # self.data.iloc[t][self.state_columns].values()
             # Zero-Order-Hold -> 
             i = np.searchsorted(input_id, t, side="right") - 1 # finde the corresponding index from input data. -1 take last step not next step
-
             forces = self.forces(x0_ = x0_, input = input[i], input_columns = input_columns, sd = sd, eps = eps)
             y_array[:len(state_columns)] = x0_
             y_array[len(state_columns):] = forces
@@ -998,14 +999,14 @@ class Krylov_forces(Krylov_pre_calc):
                     # moment arm separation according to prop location added by Jelle 
                     dbh2 = {
                         "stb": dbh/2, 
-                        "ps": -dbh/2
+                        "ps": -dbh/2  
                         }.get(lop[i], 0)
                     if lcg == 0: 
                         print("lcg = zero, please check ship_data.yml")
                     
                     h = np.sqrt((lcg)**2 + dbh2**2)*math.sin(input_values[2+i] + math.atan(dbh2/lcg))
-                    N_pod = N_pod + T * h
-                print(f"pod {i}, T: {T}, delta: {input_values[2+i]}, X_pod: {X_pod}, Y_pod: {T*math.sin(input_values[2+i])}, N_pod: {T * h}")
+                    N_pod -= T * h # positive rudder angle results in negative moment (turning to port)
+                print(f"pod {i}, T: {T}, delta: {input_values[2+i]}, h: {h}, Y_pod: {T*math.sin(input_values[2+i])}, N_pod: {T * h}")
         else:
             print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
             X_pod, Y_pod, N_pod = 0, 0, 0
@@ -1057,7 +1058,7 @@ def calc_rudder_forces_direct(sp: dict, Thr, deltas, lop):
             dbh2 = {"stb": sp["dbh"]/2, "ps": -sp["dbh"]/2}.get(lop_i, 0)
             # clearer linear form for h (equivalent to the rotated-vector form):
             h = np.sqrt((sp["lcg"])**2 + dbh2**2)*math.sin(deltas[i] + math.atan(dbh2/sp["lcg"]))
-            N_pod += T * h
+            N_pod += T * h 
 
     return X_pod, Y_pod, N_pod
 
@@ -1161,11 +1162,17 @@ if __name__ == "__main__":
 
     print("pod: ",x,y,n)
 
+    fig, ax = plt.subplots()          # Figure (Fenster) und Axes (Zeichenfläche) erstellen
 
+    ax.plot(df["y0"], df["x0"])                     # Daten plotten
 
+    ax.set_title("trajectory")             # Titel
+    ax.set_xlabel("east")          # Achsenbeschriftungen
+    ax.set_ylabel("north")
 
+    plt.show()   
 
-    # fig_2 = df.plot(x="x0", y="y0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
+    # fig_2 = df.plot(x="y0", y="x0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
     # fig_3 = df.plot(x=df.index, y="u", kind="line", title="u", labels={"u": "u"})
     # fig_4 = df.plot(x=df.index, y="psi", kind="line", title="psi", labels={"psi": "psi"})
     # fig_2.update_yaxes(
