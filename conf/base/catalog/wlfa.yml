@@ -1,0 +1,36 @@
+wlfa.krylov_parameters:
+  type: yaml.YAMLDataSet
+  filepath: conf/base/parameters/krylov.yml
+
+wlfa.ship_data:
+  type: yaml.YAMLDataSet
+  filepath: data/01_raw/wlfa/ship_data.yml
+
+wlfa.ship_resistance_HM:
+  type: pandas.CSVDataSet
+  filepath: data/01_raw/wlfa/resistance_curve_HM.csv
+  load_args:
+    encoding: "utf-8"
+
+wlfa.prop_openwater:
+  type: pandas.CSVDataSet
+  filepath: data/01_raw/wlfa/freif.inp
+  load_args:
+    sep: "\\s+"
+    header: null
+    names: ["J", "KT", "KQ"]
+    encoding: "utf-8"
+
+wlfa.test_data:
+  type: pandas.CSVDataSet
+  filepath: data/01_raw/wlfa/test_data.csv
+  load_args:
+    index_col: 0
+    encoding: "utf-8"
+  save_args:
+    index: true
+    encoding: "utf-8"
+
+wlfa.data:
+  type: pandas.ParquetDataSet
+  filepath: data/03_primary/wlfa/ZZ_5.0_10.0_b_190.0_35.0_rpm_stb_turn.parquet

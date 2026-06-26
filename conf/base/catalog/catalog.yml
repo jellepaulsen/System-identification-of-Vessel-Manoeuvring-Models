@@ -170,15 +170,3 @@ wpcc.r2_EKF:
   save_args:
     index: True
     encoding: 'utf-8'
-
-
-
-wlfa.openwater_characteristics:
-  type: pandas.CSVDataSet
-  filepath: data/01_raw/wlfa/freif.inp
-  load_args:
-    sep: '\s+'
-    header: None
-    names: ['J', 'KT', 'KQ']
-    index_col: 0
-    encoding: 'utf-8'

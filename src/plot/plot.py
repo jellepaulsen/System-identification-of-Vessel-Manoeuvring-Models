@@ -142,8 +142,8 @@ class TelemetryPlotter:
             t1 = self._parse_ts(end)
             mask = (self.df["_dt"] >= t0) & (self.df["_dt"] <= t1)
         else:
-            t0 = float(0)
-            t1 = float(1.0e50)
+            t0 = start
+            t1 = end
             print(f"type: {type(start)}, {type(self.df['_dt'].iloc[0])}")
             mask = (self.df["_dt"] >= t0) & (self.df["_dt"] <= t1)
         print(f"Filtering window: {t0} → {t1}, rows selected.")
@@ -584,7 +584,7 @@ class TelemetryPlotter:
                 valid_heading[heading_col] = self._map_angle_to_180(valid_heading[heading_col], zero_heading)
                 y = self.clamp(valid_heading[heading_col], clamp_min, clamp_max)
                 # Verwende Styling aus COLUMN_STYLE Dictionary
-                style = self.COLUMN_STYLE.get(heading_col, {"linestyle": "--", "linewidtfh": 2.0})
+                style = self.COLUMN_STYLE.get(heading_col, {"linestyle": "--", "linewidth": 2.0})
                 _plot_series(
                     ax,
                     valid_heading["_dt_used"],
@@ -621,7 +621,9 @@ class TelemetryPlotter:
         else:
             ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=30))
             
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S', tz="Europe/Amsterdam"))
+        if isinstance(start, str) and isinstance(end, str):
+            
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S', tz="Europe/Amsterdam"))
         
         # 3. Plot ROT on secondary axis
         ax2 = None  # Wird nur erstellt wenn rot_col vorhanden

@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import cProfile
 
 from dataclasses import dataclass
-from krylov_data import ShipConfig
+from Krylov.krylov_data import ShipConfig
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 
@@ -68,6 +68,9 @@ def get_test_input(
     df = pd.DataFrame(rows).set_index("time")
     df.index.name = "time"
     return df
+
+
+
 
 
 class Krylov_pre_calc:    
@@ -128,6 +131,7 @@ class Krylov_pre_calc:
 
 class Krylov_forces(Krylov_pre_calc):
     def __init__(self, 
+                 ship_parameters: dict,
                  krylov_parameters: dict,
                  ship_resistance: pd.DataFrame = None,
                  prop_openwater: pd.DataFrame = None,
@@ -139,14 +143,25 @@ class Krylov_forces(Krylov_pre_calc):
         
         super().__init__(ship_parameters, krylov_parameters)
 
-        states = data[state_columns]
-        input = data[input_columns]
-        input_columns = input_columns
-        state_columns = state_columns
+        # states = data[state_columns]
+        # input = data[input_columns]
+        self.data = data
+        self.input_columns = input_columns
+        self.state_columns = state_columns
         sd = self.sd
         sd.prop_openwater = prop_openwater
         sd.ship_resistance = self.add_column(ship_resistance, 0.514444, "kn", "m/s")  # Convert kn to m/s
         sd.ship_resistance = self.add_ct(sd.ship_resistance, sd)
+
+        
+        # try:
+        #     missing = [col for col in input_columns if col not in data.columns]
+        # except KeyError as e:
+        #     raise KeyError(f"columns not found in df: {missing}")
+
+
+
+
 
         # self.test(x0 = states.iloc[0].values, input = input, input_columns = input_columns, sd = sd, eps = self.eps)
 
@@ -154,7 +169,76 @@ class Krylov_forces(Krylov_pre_calc):
     #     self.forces(x0 = x0, input = input, input_columns = input_columns, sd = sd, eps = eps)
 
 
+    def map_column_names_for_simulation(
+        self,
+        input_columns_data: list,
+        geopos: list,
+    ) -> pd.DataFrame:
+        """Map raw measurement data to simulation input format.
 
+        Args:
+            df: input DataFrame
+            columns: input column names to rename
+            geopos: [lat_col, lon_col] column names containing position in degrees
+            output_columns: output column names, 1:1 with `columns`
+
+        Returns:
+            DataFrame with renamed columns and geopos converted to NED metres
+            (x+ North, y+ East), origin at first row.
+        """
+        output_columns = self.input_columns  # For now, we assume the output columns are the same as input columns
+        if len(input_columns_data) != len(output_columns):
+            raise ValueError("input_columns_data and output_columns must have the same length")
+
+        out = self.data.copy()
+
+
+        # rename columns 1:1
+        rename_map = dict(zip(input_columns_data, output_columns))
+        out = out.rename(columns=rename_map)
+
+        # convert lat/lon [deg] → NED [m] relative to first position
+        lat_col, lon_col = geopos
+        # use renamed names if the geopos cols were in `columns`
+        lat_out = rename_map.get(lat_col, lat_col)
+        lon_out = rename_map.get(lon_col, lon_col)
+
+        R = 6_371_000.0  # mean Earth radius [m]
+        lat0 = math.radians(out[lat_out].iloc[0])
+        lon0 = math.radians(out[lon_out].iloc[0])
+
+        lat_rad = out[lat_out].apply(math.radians)
+        lon_rad = out[lon_out].apply(math.radians)
+
+        # x+ North, y+ East
+        out[lat_out] = (lat_rad - lat0) * R
+        out[lon_out] = (lon_rad - lon0) * math.cos(lat0) * R
+
+        out = out.rename(columns={lat_out: "x0", lon_out: "y0"})
+
+        return out
+
+    def get_x0(self, sog_col: str, cog_col: str, heading_col: str, rot_col: str) -> list:
+        """Compute initial state [x0, y0, psi, u, v, r] from first row of self.data.
+
+        SOG/COG are in the earth frame; u/v are resolved into the body frame via psi.
+        """
+        row = self.data.iloc[0]
+
+        psi = math.radians(row[heading_col])
+        sog = row[sog_col]
+        cog = math.radians(row[cog_col])
+        r   = math.radians(row[rot_col])
+
+        # earth-frame velocity components (NED)
+        v_north = sog * math.cos(cog)
+        v_east  = sog * math.sin(cog)
+
+        # rotate into body frame
+        u =  v_north * math.cos(psi) + v_east * math.sin(psi)
+        v = -v_north * math.sin(psi) + v_east * math.cos(psi)
+
+        return [0.0, 0.0, psi, u, v, r]
 
     def add_ct(self, df: pd.DataFrame, sd: ShipConfig):
         psi1 = (sd.Ta - sd.Tf) /sd.L 
@@ -177,7 +261,7 @@ class Krylov_forces(Krylov_pre_calc):
                 df.loc[idx, "ct"] = row["kN"]*m / (0.5 * sd.rho * sd.S * row["m/s"]**2)
                 df.loc[idx, "ct_kry"] = row["kN"]*m / (0.5 * sd.rho * asigma * row["m/s"]**2)
 
-        print(df)
+        # print(df)
         return df
 
     def add_column(self, df: pd.DataFrame, factor: float, column: str, new_column: str):
@@ -195,7 +279,7 @@ class Krylov_forces(Krylov_pre_calc):
         return wrapper
     
     @timer
-    def simulate(self, data: pd.DataFrame, x0_,  input_columns: list, state_columns: list):
+    def simulate(self, x0_):
         '''
         input columns: N und Delta_r
         state columns: x0, y0, psi, u, v, r
@@ -205,10 +289,11 @@ class Krylov_forces(Krylov_pre_calc):
         print("Initializing simulation with Krylov forces...")
         sd = self.sd
         eps = self.eps
-        
+        input_columns = self.input_columns
+        state_columns = self.state_columns
         # translate to numpy to gain performance
-        t_input = data.index.to_numpy()
-        input_data = data[input_columns].to_numpy()
+        t_input = self.data.index.to_numpy()
+        input_data = self.data[input_columns].to_numpy()
 
 
         n_y = len(state_columns) + 3 # length of input_array for rhs
@@ -239,7 +324,7 @@ class Krylov_forces(Krylov_pre_calc):
         # here the integration of the rhs function needs to be implemented, e.g. with scipy solve_ivp or a custom implementation
         # the output should be a DataFrame with the same columns as state_columns and the same index as data
         
-        t = data.index
+        t = self.data.index
         t_span = [t.min(), t.max()]
         t_eval = np.linspace(t.min(), t.max(), len(t))
 
@@ -260,9 +345,12 @@ class Krylov_forces(Krylov_pre_calc):
             print("Integration failed:", sol.message)
 
 
-        print(F"psi: {sol.y[2, -20:]}\n u: {sol.y[3, -20:]}\n v: {sol.y[4, -20:]}\n r: {sol.y[5, -20:]}\n")
+        # print(F"psi: {sol.y[2, -20:]}\n u: {sol.y[3, -20:]}\n v: {sol.y[4, -20:]}\n r: {sol.y[5, -20:]}\n")
         df_sim = pd.DataFrame(sol.y.T, columns=state_columns, index=t_eval)
-        return df_sim
+        df_input = pd.DataFrame(input_data, columns=input_columns, index=t_eval)
+        
+
+        return pd.concat([df_sim, df_input], axis=1)
     
   
     
@@ -329,15 +417,15 @@ class Krylov_forces(Krylov_pre_calc):
         if x0_ is None:
             x0_ = input.iloc[0][input_columns].values()
 
-        if x0_[3] > 20 or x0_[4] > 20:
-            print(f"blitzmeister")
-            return None, None, None
+        # if x0_[3] > 20 or x0_[4] > 20:
+        #     print(f"blitzmeister")
+        #     return None, None, None
         # adding wave induced velocities to 
         # need to be added
 
         
         beta_eff, beta_eff_sign = self.eff_drift_angle(x0_, eps) # self.beta_eff
-        print(f"u: {x0_[3]}, v: {x0_[4]}, r: {x0_[5]}, beta_eff: {beta_eff}")
+        # print(f"u: {x0_[3]}, v: {x0_[4]}, r: {x0_[5]}, beta_eff: {beta_eff}")
 
         # print(f"Calculating forces for state: {x0_}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
         # x0_ = self.wave_induced_velocities(x0_)
@@ -352,7 +440,7 @@ class Krylov_forces(Krylov_pre_calc):
         # print(f"Krylov forces: X_kr={kr_X:.2f} N, Y_kr={kr_Y:.2f} N, N_kr={kr_N:.2f} Nm")
         # print(f"Pod forces: X_pod={pox_X:.2f} N, Y_pod={pod_Y:.2f} N, N_pod={pod_N:.2f} Nm")
 
-        print(f"X: {kr_X}, {pox_X:.2f} N, Y: {kr_Y}, {pod_Y:.2f} N, N: {kr_N}, {pod_N:.2f} Nm")
+        # print(f"X: {kr_X}, {pox_X:.2f} N, Y: {kr_Y}, {pod_Y:.2f} N, N: {kr_N}, {pod_N:.2f} Nm")
 
 
 
@@ -630,8 +718,8 @@ class Krylov_forces(Krylov_pre_calc):
 
         cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta_eff)*180/np.pi/self.kp["psix"])))
 
-        print(f"cxb: {round(cxb, 5)}, beta_eff: {round(beta_eff, 5)}, cx0: {round(cx0, 5)}, uchar: {round(Uchar, 2)}, u: {round(x0_[3], 2)}, v: {round(x0_[4], 2)}, r: {round(x0_[5], 2)}")
-
+        # print(f"cxb: {round(cxb, 5)}, beta_eff: {round(beta_eff, 5)}, cx0: {round(cx0, 5)}, uchar: {round(Uchar, 2)}, u: {round(x0_[3], 2)}, v: {round(x0_[4], 2)}, r: {round(x0_[5], 2)}")
+# 
         # print(f"cx0: {cx0}, cxb: {cxb}")
         # calc_cn
         # cn = self.calc_cn(x0_= x0_, sd= sd, c2= c2, cn_beta= cn_beta, beta_eff= beta_eff, Tml= sd.TmL, sigma= sigma, LB= LB, Uchar= Uchar, eps= self.eps)
@@ -983,7 +1071,7 @@ class Krylov_forces(Krylov_pre_calc):
             for i, n in enumerate(N):
                 J = (urx * (1- w))/ (n* D_p)
                 Kt = np.interp(J, prop_openwater["J"], prop_openwater["KT"])
-                print(f"pod {i}, J: {J}, Kt: {Kt}")
+                # print(f"pod {i}, J: {J}, Kt: {Kt}")
 
                 Thr[i] = Kt * sd.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
         
@@ -1006,7 +1094,7 @@ class Krylov_forces(Krylov_pre_calc):
                     
                     h = np.sqrt((lcg)**2 + dbh2**2)*math.sin(input_values[2+i] + math.atan(dbh2/lcg))
                     N_pod -= T * h # positive rudder angle results in negative moment (turning to port)
-                print(f"pod {i}, T: {T}, delta: {input_values[2+i]}, h: {h}, Y_pod: {T*math.sin(input_values[2+i])}, N_pod: {T * h}")
+                # print(f"pod {i}, T: {T}, delta: {input_values[2+i]}, h: {h}, Y_pod: {T*math.sin(input_values[2+i])}, N_pod: {T * h}")
         else:
             print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
             X_pod, Y_pod, N_pod = 0, 0, 0
@@ -1107,7 +1195,7 @@ def test_calc_rudder_forces_direct():
 
 if __name__ == "__main__":
     with open("conf/base/parameters/krylov.yml", "r") as f:
-        krylov_parameters = yaml.safe_load(f)
+        kry_p = yaml.safe_load(f)
 
     with open("data/01_raw/wlfa/ship_data.yml", "r") as f:
         ship_parameters = yaml.safe_load(f)
@@ -1124,9 +1212,9 @@ if __name__ == "__main__":
     # test_calc_rudder_forces_direct()
 
 
-    pd.options.plotting.backend = "plotly"
+    # pd.options.plotting.backend = "plotly"
     # fig = ship_resistance.plot(x="kn", y="kN", kind="line", title="Resistance Curve", labels={"kn": "Speed (knots)", "kN": "Resistance (kN)"})
-    fig = prop_openwater.plot(x="J", y="KT", kind="line", title="Resistance Curve", labels={"J": "J", "KT": "KT"})
+    # fig = prop_openwater.plot(x="J", y="KT", kind="line", title="Resistance Curve", labels={"J": "J", "KT": "KT"})
     # fig.show()
 
 
@@ -1148,24 +1236,32 @@ if __name__ == "__main__":
         "delta_r1": [math.radians(10), math.radians(10), math.radians(10), math.radians(10), math.radians(10), math.radians(10)],
     })
 
-    kf = Krylov_forces(krylov_parameters, ship_resistance=ship_resistance, prop_openwater = prop_openwater, data = data)
+    kf = Krylov_forces(ship_parameters=ship_parameters, krylov_parameters=kry_p, ship_resistance=ship_resistance, prop_openwater=prop_openwater, data=input_data)
     kf.hydro_mass()
     # kf.sd.Fn = 0.50
     # kf.xtg = -0.03
     x0_ = [0,0,0,3.6,0,0]
 
     # x, y, n = kf.forces(x0 = x0_, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
-    a, b, c , d, e, f =kf.equations()
-    print(f"{a}\n{b}\n{c}\n{d}\n{e}\n{f}")
-    df = kf.simulate(input_data, x0_,input_columns = ["N0", "N1", "delta_r0", "delta_r1"], state_columns = ["x0", "y0", "psi", "u", "v", "r"])
+    # a, b, c , d, e, f =kf.equations()
+    # print(f"{a}\n{b}\n{c}\n{d}\n{e}\n{f}")
+    df = kf.simulate(x0_)
+
     df.reset_index(inplace=True)
     df_plot = TelemetryPlotter(df, t_unit="s", timecolumn="index", relative_time=True, sensor=False)
 
 
-    df_plot.plot_track(start= 0, end = 1e90, lat_col= "y0", lon_col= "x0", figsize= (12, 8), invert_y= True)
+    # df_plot.plot_track(start= 0, end = 1e90, lat_col= "y0", lon_col= "x0", figsize= (12, 8), invert_y= True)
     # def __init__(self, df: pd.DataFrame, t_unit: str = "ns", timecolumn: str = "timestamp_ns", relative_time: bool = False, sensor: bool = True)
 
-    
+    ##########################################################
+    # als end einfach den höchsten index nehmen!!!,
+    ##########################################################
+
+
+    print(df.index[-1])
+
+    df_plot.plot_azimuth(start= 0, end = df.index[-1], columns= ["psi"], heading_col= "psi", figsize= (12, 8), invert_y= False)
 
 
 
