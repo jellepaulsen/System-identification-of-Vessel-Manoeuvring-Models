@@ -87,8 +87,7 @@ class TelemetryPlotter:
             if t_unit == "ns":
                 self.df["_dt"] = self.df[timecolumn] - self.df[timecolumn].min()
             if t_unit == "s":
-                self.df["_dt"] = (self.df[timecolumn] - self.df[timecolumn].min()) * 1e9
-                print(self.df["_dt"].head())
+                self.df["_dt"] = self.df[timecolumn] - self.df[timecolumn].min()
         else:
             if t_unit == "ns":
                 self.df["_dt"] = pd.to_datetime(self.df[timecolumn], unit="ns", utc=True)
@@ -547,7 +546,7 @@ class TelemetryPlotter:
         wind_dir_col: str - Spalte für True Wind Direction
         """
         subset = self._filter_window(start, end)
-
+        print(f"Filtered window: {start} → {end}, rows selected: {len(subset)}")
         if subset.empty:
             print(f"No data in window {start} – {end}")
             return
@@ -711,7 +710,7 @@ class TelemetryPlotter:
 
         if invert_y:
             ax.invert_yaxis()
-        plt.tight_layout()
+        # plt.tight_layout()
         plt.show()
 
     def compare_azimuth(

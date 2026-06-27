@@ -31,6 +31,14 @@ wlfa.test_data:
     index: true
     encoding: "utf-8"
 
-wlfa.data:
+wlfa.ZZ_10.0_10.0_b_190.0_35.0_rpm_ps_turn:
+  type: pandas.ParquetDataSet
+  filepath: data/03_primary/wlfa/ZZ_10.0_10.0_b_190.0_35.0_rpm_ps_turn.parquet
+
+wlfa.ZZ_5.0_10.0_b_190.0_35.0_rpm_stb_turn:
   type: pandas.ParquetDataSet
   filepath: data/03_primary/wlfa/ZZ_5.0_10.0_b_190.0_35.0_rpm_stb_turn.parquet
+
+wlfa.segmentation:
+  type: pandas.ParquetDataSet
+  filepath: data/02_intermediate/wlfa/segments_enriched.parquet

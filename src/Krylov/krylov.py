@@ -214,7 +214,7 @@ class Krylov_forces(Krylov_pre_calc):
         out[lat_out] = (lat_rad - lat0) * R
         out[lon_out] = (lon_rad - lon0) * math.cos(lat0) * R
 
-        out = out.rename(columns={lat_out: "x0", lon_out: "y0"})
+        self.data = out.rename(columns={lat_out: "x0", lon_out: "y0"})
 
         return out
 
@@ -348,9 +348,27 @@ class Krylov_forces(Krylov_pre_calc):
         # print(F"psi: {sol.y[2, -20:]}\n u: {sol.y[3, -20:]}\n v: {sol.y[4, -20:]}\n r: {sol.y[5, -20:]}\n")
         df_sim = pd.DataFrame(sol.y.T, columns=state_columns, index=t_eval)
         df_input = pd.DataFrame(input_data, columns=input_columns, index=t_eval)
-        
 
-        return pd.concat([df_sim, df_input], axis=1)
+        forces_list = []
+        for k, t_i in enumerate(t_eval):
+            idx = np.searchsorted(t_input, t_i, side="right") - 1
+            x0_k = sol.y[:, k]
+            inp_k = input_data[idx]
+            beta_eff, beta_eff_sign = self.eff_drift_angle(x0_k, eps)
+            kr_X, kr_Y, kr_N = self.krylov_force(x0_k, sd, beta_eff, beta_eff_sign, eps)
+            pod_X, pod_Y, pod_N = self.calc_pod_forces(
+                input=inp_k, input_columns=input_columns, sd=sd, urx=x0_k[3]
+            )
+            forces_list.append((kr_X, kr_Y, kr_N, pod_X, pod_Y, pod_N,
+                                 kr_X + pod_X, kr_Y + pod_Y, kr_N + pod_N))
+
+        df_forces = pd.DataFrame(forces_list,
+                                 columns=["kr_X", "kr_Y", "kr_N",
+                                          "pod_X", "pod_Y", "pod_N",
+                                          "F_X", "F_Y", "M_N"],
+                                 index=t_eval)
+
+        return pd.concat([df_sim, df_input, df_forces], axis=1)
     
   
     
@@ -1068,12 +1086,23 @@ class Krylov_forces(Krylov_pre_calc):
             print(f"NOT implemented yet!")
             # to be coninued
         elif len(Thr) == 2:
+
+            # von claude eingefügt sinnvolles clamping um negative interpolationen zu vermeiden
+        
+            J_min = prop_openwater["J"].iloc[0]
+            J_max = prop_openwater["J"].iloc[-1]
             for i, n in enumerate(N):
-                J = (urx * (1- w))/ (n* D_p)
+                if abs(n) < self.eps:
+                    Thr[i] = 0.0
+                    continue
+                J = (urx * (1 - w)) / (n * D_p)
+                J = np.clip(J, J_min, J_max)
                 Kt = np.interp(J, prop_openwater["J"], prop_openwater["KT"])
+                Kt = max(Kt, 0.0)  # kein negativer Schub durch J-Extrapolation
                 # print(f"pod {i}, J: {J}, Kt: {Kt}")
 
                 Thr[i] = Kt * sd.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
+                # print(f"pod {i}, J: {J}, Kt: {Kt}", f"Thr: {Thr[i]}, N: {N[i]}")
         
         if pod == 1:
             # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
