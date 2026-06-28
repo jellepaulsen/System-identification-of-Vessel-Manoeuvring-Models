@@ -1123,7 +1123,7 @@ class Krylov_forces(Krylov_pre_calc):
                     
                     h = np.sqrt((lcg)**2 + dbh2**2)*math.sin(input_values[2+i] + math.atan(dbh2/lcg))
                     N_pod -= T * h # positive rudder angle results in negative moment (turning to port)
-                # print(f"pod {i}, T: {T}, delta: {input_values[2+i]}, h: {h}, Y_pod: {T*math.sin(input_values[2+i])}, N_pod: {T * h}")
+                # print(f"pod {i}, T: {T}, delta: {input_values[2+i]}, h: {h}, X_pod: {T*math.cos(input_values[2+i])}, Y_pod: {T*math.sin(input_values[2+i])}, N_pod: {T * h}")
         else:
             print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
             X_pod, Y_pod, N_pod = 0, 0, 0
