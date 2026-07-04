@@ -135,7 +135,9 @@ def create_zigzag_test_data(
 
 if __name__ == "__main__":
     # Beispiel für die Erstellung von Testdaten
-    # test_data = create_test_data(duration_s=100, rpm=550, rudder_angle=20, fs=100)
-    test_data = create_zigzag_test_data(h=30, h0=30, n=5, N=500, delta=20, rate_of_turn=30, fs=100)
+    test_data = create_test_data(duration_s=100, rpm=550, rudder_angle=10, fs=100)
+
+
+    # test_data = create_zigzag_test_data(h=30, h0=30, n=5, N=500, delta=20, rate_of_turn=30, fs=100)
     test_data.to_csv("data/01_raw/wlfa/test_data.csv")
     print(test_data.head(10))

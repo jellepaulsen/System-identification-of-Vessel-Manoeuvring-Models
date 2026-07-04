@@ -73,7 +73,18 @@ def get_test_input(
 
 
 
-class Krylov_pre_calc:    
+@dataclass
+class ZigzagConfig:
+    N: float          # propeller RPM
+    delta_deg: float  # rudder angle magnitude [deg]
+    psi_des: float    # heading threshold per side [deg]
+    n_switches: int   # number of rudder reversals
+    t0: float         # pre-maneuver acceleration time [s]
+    t_aft: float      # coast-down duration after last switch [s]
+    dt: float = 0.5   # output timestep [s]
+
+
+class Krylov_pre_calc:
     def __init__(self, ship_parameters: dict, krylov_parameters: dict):
         self.sd = ShipConfig(**ship_parameters)
         self.kp = krylov_parameters
@@ -91,10 +102,10 @@ class Krylov_pre_calc:
         C=self.kp["C"]	           #Lewis coefficient
 
         self.hydro_mass_dict = {}
-        
         m11 = np.pi * self.sd.rho* self.sd.Tm**2 * C *R1_munk * self.sd.L/2.
         m22 = np.pi * self.sd.rho* self.sd.Tm**2 * self.sd.L/2. * C *R2_munk* 1/2
         m66 = np.pi * self.sd.rho* self.sd.Tm**2 * self.sd.L**2. * C *R3_munk / 24  * self.sd.L
+        print(f"m11: {m11:.2f}, m22: {m22:.2f}, m66: {m66:.2f}")
         
 
         if self.sd.noh > 2:
@@ -104,6 +115,7 @@ class Krylov_pre_calc:
             qqq = -1.0 + self.sd.dbh / self.sd.B
             Akxx = 2. + np.exp(-qqq)
             Akyy = 2. -0.8*np.exp(-2.*qqq)
+            print(f"Akxx: {Akxx:.2f}, Akyy: {Akyy:.2f}")
             self.Corr_x=2.	
             self.Corr_y = 2.-0.5*np.exp(-2.*qqq)
             self.Corr_n=2.-0.65*np.exp(-2.*qqq)
@@ -112,7 +124,10 @@ class Krylov_pre_calc:
             self.hydro_mass_dict["m11"] = m11 * Akxx
             self.hydro_mass_dict["m22"] = m22 * Akyy
             self.hydro_mass_dict["m66"] = Akyy*(m66+((self.sd.dbh/2.0)**2)*m22)+Akxx*((self.sd.dbh/2.0)**2)*m11 
-            self.hydro_mass_dict["izz"] = 11115 # fixed value for catamaran no idea about dimension 
+            
+            self.hydro_mass_dict["izz"] = 409355 # 11115 fixed value for catamaran no idea about dimension 
+            self.hydro_mass_dict["m66"] = self.hydro_mass_dict["izz"] *0.7
+            print(f"m11: {self.hydro_mass_dict['m11']:.2f}, m22: {self.hydro_mass_dict['m22']:.2f}, m66: {self.hydro_mass_dict['m66']:.2f}, izz: {self.hydro_mass_dict['izz']:.2f}")
         else: 
             volume = self.sd.CB * self.sd.L * self.sd.B * self.sd.Tm
             m = volume * self.sd.rho
@@ -142,6 +157,7 @@ class Krylov_forces(Krylov_pre_calc):
                  ):
         
         super().__init__(ship_parameters, krylov_parameters)
+        self.debug = False
 
         # states = data[state_columns]
         # input = data[input_columns]
@@ -150,9 +166,10 @@ class Krylov_forces(Krylov_pre_calc):
         self.state_columns = state_columns
         sd = self.sd
         sd.prop_openwater = prop_openwater
-        sd.ship_resistance = self.add_column(ship_resistance, 0.514444, "kn", "m/s")  # Convert kn to m/s
-        sd.ship_resistance = self.add_ct(sd.ship_resistance, sd)
-
+        if "m/s" not in ship_resistance.columns:
+            ship_resistance = self.add_column(ship_resistance, 0.514444, "kn", "m/s")  # Convert kn to m/s
+        sd.ship_resistance = self.add_ct(ship_resistance, sd)
+        self.cns = []
         
         # try:
         #     missing = [col for col in input_columns if col not in data.columns]
@@ -195,27 +212,28 @@ class Krylov_forces(Krylov_pre_calc):
 
         # rename columns 1:1
         rename_map = dict(zip(input_columns_data, output_columns))
+        print(f"Renaming columns: {rename_map}")
         out = out.rename(columns=rename_map)
 
         # convert lat/lon [deg] → NED [m] relative to first position
-        lat_col, lon_col = geopos
-        # use renamed names if the geopos cols were in `columns`
-        lat_out = rename_map.get(lat_col, lat_col)
-        lon_out = rename_map.get(lon_col, lon_col)
+        # lat_col, lon_col = geopos
+        # # use renamed names if the geopos cols were in `columns`
+        # lat_out = rename_map.get(lat_col, lat_col)
+        # lon_out = rename_map.get(lon_col, lon_col)
 
-        R = 6_371_000.0  # mean Earth radius [m]
-        lat0 = math.radians(out[lat_out].iloc[0])
-        lon0 = math.radians(out[lon_out].iloc[0])
+        # R = 6_371_000.0  # mean Earth radius [m]
+        # lat0 = math.radians(out[lat_out].iloc[0])
+        # lon0 = math.radians(out[lon_out].iloc[0])
 
-        lat_rad = out[lat_out].apply(math.radians)
-        lon_rad = out[lon_out].apply(math.radians)
+        # lat_rad = out[lat_out].apply(math.radians)
+        # lon_rad = out[lon_out].apply(math.radians)
 
-        # x+ North, y+ East
-        out[lat_out] = (lat_rad - lat0) * R
-        out[lon_out] = (lon_rad - lon0) * math.cos(lat0) * R
+        # # x+ North, y+ East
+        # out[lat_out] = (lat_rad - lat0) * R
+        # out[lon_out] = (lon_rad - lon0) * math.cos(lat0) * R
 
-        self.data = out.rename(columns={lat_out: "x0", lon_out: "y0"})
-
+        # self.data = out.rename(columns={lat_out: "x0", lon_out: "y0"})
+        
         return out
 
     def get_x0(self, sog_col: str, cog_col: str, heading_col: str, rot_col: str) -> list:
@@ -255,8 +273,8 @@ class Krylov_forces(Krylov_pre_calc):
             x, asigma = self.calc_sigma(sd = sd,psi1=psi1, psi2=psi2, Tm=sd.Tm, L=sd.L, askeg=sd.askeg, fr_i=sd.fr_i)
 
             if sd.noh == 2:
-                df.loc[idx, "ct"] = row["kN"]*m / (sd.rho * row["m/s"]**2 * sd.S)
-                df.loc[idx, "ct_kry"] = row["kN"]*m / (sd.rho * asigma * row["m/s"]**2)
+                df.loc[idx, "ct"] = row["kN"]*m / (0.5*sd.rho * row["m/s"]**2 * sd.S)
+                df.loc[idx, "ct_kry"] = row["kN"]*m / (0.5*sd.rho * asigma * row["m/s"]**2)
             else: 
                 df.loc[idx, "ct"] = row["kN"]*m / (0.5 * sd.rho * sd.S * row["m/s"]**2)
                 df.loc[idx, "ct_kry"] = row["kN"]*m / (0.5 * sd.rho * asigma * row["m/s"]**2)
@@ -326,7 +344,9 @@ class Krylov_forces(Krylov_pre_calc):
         
         t = self.data.index
         t_span = [t.min(), t.max()]
-        t_eval = np.linspace(t.min(), t.max(), len(t))
+        dt_out = 0.01  # fixed 100 Hz output, independent of input sampling rate
+        n_out = max(2, int(round((t_span[1] - t_span[0]) / dt_out)) + 1)
+        t_eval = np.linspace(t_span[0], t_span[1], n_out)
 
         # sol = solve_ivp(rhs, t_span, data[state_columns].iloc[0].values, t_eval=t_eval, method='RK45')
 
@@ -355,7 +375,139 @@ class Krylov_forces(Krylov_pre_calc):
             x0_k = sol.y[:, k]
             inp_k = input_data[idx]
             beta_eff, beta_eff_sign = self.eff_drift_angle(x0_k, eps)
-            kr_X, kr_Y, kr_N = self.krylov_force(x0_k, sd, beta_eff, beta_eff_sign, eps)
+            kr_X, kr_Y, kr_N, cns = self.krylov_force(x0_k, sd, beta_eff, beta_eff_sign, eps)
+            pod_X, pod_Y, pod_N = self.calc_pod_forces(
+                input=inp_k, input_columns=input_columns, sd=sd, urx=x0_k[3]
+            )
+            forces_list.append((kr_X, kr_Y, kr_N, pod_X, pod_Y, pod_N,
+                                 kr_X + pod_X, kr_Y + pod_Y, kr_N + pod_N, 
+                                 cns))
+
+        df_forces = pd.DataFrame(forces_list,
+                                 columns=["kr_X", "kr_Y", "kr_N",
+                                          "pod_X", "pod_Y", "pod_N",
+                                          "F_X", "F_Y", "M_N", "cns"],
+                                 index=t_eval)
+
+        return pd.concat([df_sim, df_input, df_forces], axis=1)
+    
+
+    def _make_rhs_with_input(self, N: float, delta_r: float):
+        """Build an rhs(t, y) closure for a fixed propeller RPM and rudder angle."""
+        rhs_sym = self.equations()
+        rhs_input = self.state_columns + ["F_X", "F_Y", "M_N"]
+        rhs_func = sp.lambdify(rhs_input, rhs_sym, modules="numpy")
+        n_y = len(self.state_columns) + 3
+        y_ = np.empty(n_y)
+        input_arr = np.array([N, N, delta_r, delta_r], dtype=float)
+        sd = self.sd
+        eps = self.eps
+        input_columns = self.input_columns
+        state_columns = self.state_columns
+
+        def rhs(t, y):
+            forces, cns = self.forces(x0_=y, input=input_arr,
+                                 input_columns=input_columns, sd=sd, eps=eps)
+            y_[:len(state_columns)] = y
+            y_[len(state_columns):] = forces
+            return np.asanyarray(rhs_func(*y_)).ravel()
+
+        return rhs
+
+    @timer
+    def simulate_zigzag(self, x0_: list, config: ZigzagConfig) -> pd.DataFrame:
+        """IMO zigzag manoeuvre simulation.
+
+        Phases:
+          1. ACCEL  – rudder=0, N=config.N for config.t0 seconds
+          2. MANEUVER – alternating ±delta_r until heading threshold ±psi_des is
+                        reached; repeated config.n_switches times
+          3. COAST  – rudder=0, N=0 for config.t_aft seconds
+        """
+        psi_des_rad = math.radians(config.psi_des)
+        delta_rad   = math.radians(config.delta_deg)
+        state_columns  = self.state_columns
+        input_columns  = self.input_columns
+        sd             = self.sd
+
+        # Each entry: (sol, N_seg, delta_seg, phase_label)
+        segments = []
+
+        t_now = 0.0
+        y_now = np.array(x0_, dtype=float)
+
+        def _integrate(rhs, t_start, duration, y0, event=None):
+            t_end  = t_start + duration
+            t_eval = np.arange(t_start, t_end + config.dt, config.dt)
+            t_eval = np.clip(t_eval, t_start, t_end)
+            evs = [event] if event is not None else []
+            return solve_ivp(rhs, [t_start, t_end], y0,
+                             t_eval=t_eval, events=evs, method='Radau')
+
+        # --- Phase 1: ACCEL ---
+        print(f"Zigzag: acceleration phase (t0={config.t0}s, N={config.N} RPM)...")
+        rhs = self._make_rhs_with_input(config.N, 0.0)
+        sol = _integrate(rhs, t_now, config.t0, y_now)
+        segments.append((sol, config.N, 0.0, 'accel'))
+        t_now = sol.t[-1]
+        y_now = sol.y[:, -1]
+
+        # --- Phase 2: MANEUVER ---
+        print(f"Zigzag: manoeuvre phase ({config.n_switches} switches, "
+              f"delta={config.delta_deg}°, psi_des={config.psi_des}°)...")
+        sign = 1
+        for i in range(config.n_switches):
+            rudder  = sign * delta_rad
+            rhs     = self._make_rhs_with_input(config.N, rudder)
+            psi_ref = float(y_now[2])
+
+            def heading_event(t, y, s=sign, ref=psi_ref, des=psi_des_rad):
+                return s * (y[2] - ref) - des
+            heading_event.terminal  = True
+            heading_event.direction = 1   # fires only when value crosses 0 upward
+
+            sol = _integrate(rhs, t_now, 600.0, y_now, event=heading_event)
+            segments.append((sol, config.N, rudder, 'maneuver'))
+            t_now = sol.t[-1]
+            y_now = sol.y[:, -1]
+            print(f"  switch {i+1}/{config.n_switches}: "
+                  f"t={t_now:.1f}s  psi={math.degrees(float(y_now[2])):.1f}°  "
+                  f"next rudder={'port' if sign < 0 else 'stbd'}")
+            sign *= -1
+
+        # --- Phase 3: COAST ---
+        print(f"Zigzag: coast phase (t_aft={config.t_aft}s)...")
+        rhs = self._make_rhs_with_input(0.0, 0.0)
+        sol = _integrate(rhs, t_now, config.t_aft, y_now)
+        segments.append((sol, 0.0, 0.0, 'coast'))
+
+        # --- Combine segments (drop duplicate boundary point between segments) ---
+        parts_t, parts_y, parts_inp, parts_phase = [], [], [], []
+        for k, (s, N_seg, delta_seg, phase) in enumerate(segments):
+            sl = slice(1, None) if k > 0 else slice(None)
+            parts_t.append(s.t[sl])
+            parts_y.append(s.y[:, sl])
+            n = s.t[sl].shape[0]
+            parts_inp.append(
+                np.tile([N_seg, N_seg, delta_seg, delta_seg], (n, 1))
+            )
+            parts_phase.extend([phase] * n)
+
+        t_all   = np.concatenate(parts_t)
+        y_all   = np.hstack(parts_y)
+        inp_all = np.vstack(parts_inp)
+
+        df_sim   = pd.DataFrame(y_all.T,  columns=state_columns,  index=t_all)
+        df_input = pd.DataFrame(inp_all,  columns=input_columns,  index=t_all)
+        df_phase = pd.DataFrame({'phase': parts_phase},            index=t_all)
+
+        # Recompute forces at every output point (same approach as simulate)
+        forces_list = []
+        for k in range(len(t_all)):
+            x0_k = y_all[:, k]
+            inp_k = inp_all[k]
+            beta_eff, beta_eff_sign = self.eff_drift_angle(x0_k, self.eps)
+            kr_X, kr_Y, kr_N = self.krylov_force(x0_k, sd, beta_eff, beta_eff_sign, self.eps)
             pod_X, pod_Y, pod_N = self.calc_pod_forces(
                 input=inp_k, input_columns=input_columns, sd=sd, urx=x0_k[3]
             )
@@ -366,12 +518,11 @@ class Krylov_forces(Krylov_pre_calc):
                                  columns=["kr_X", "kr_Y", "kr_N",
                                           "pod_X", "pod_Y", "pod_N",
                                           "F_X", "F_Y", "M_N"],
-                                 index=t_eval)
+                                 index=t_all)
 
-        return pd.concat([df_sim, df_input, df_forces], axis=1)
-    
-  
-    
+        print("Zigzag simulation completed.")
+        return pd.concat([df_sim, df_input, df_forces, df_phase], axis=1)
+
     def equations(self):
         # movement equations for the forces, to be simplified and lambdified with sympy
 
@@ -405,23 +556,12 @@ class Krylov_forces(Krylov_pre_calc):
             # self.data.iloc[t][self.state_columns].values()
             # Zero-Order-Hold -> 
             i = np.searchsorted(input_id, t, side="right") - 1 # finde the corresponding index from input data. -1 take last step not next step
-            forces = self.forces(x0_ = x0_, input = input[i], input_columns = input_columns, sd = sd, eps = eps)
+            X, Y, N, cns = self.forces(x0_ = x0_, input = input[i], input_columns = input_columns, sd = sd, eps = eps)
             y_array[:len(state_columns)] = x0_
-            y_array[len(state_columns):] = forces
+            y_array[len(state_columns):] = [X, Y, N]
 
             return np.asanyarray(rhs_func(*y_array)).ravel()
         return rhs
-
-# 
-# 
-
-
-
-    def interpol_N():
-        pass
-    def interpol_delta():
-        pass
-
 
     def forces(self,
                 x0_ = None,
@@ -447,7 +587,7 @@ class Krylov_forces(Krylov_pre_calc):
 
         # print(f"Calculating forces for state: {x0_}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
         # x0_ = self.wave_induced_velocities(x0_)
-        kr_X, kr_Y, kr_N = self.krylov_force(x0_, sd, beta_eff, beta_eff_sign, eps)
+        kr_X, kr_Y, kr_N, cns = self.krylov_force(x0_, sd, beta_eff, beta_eff_sign, eps)
         pox_X, pod_Y, pod_N = self.calc_pod_forces(
                         input = input,
                         input_columns = input_columns,
@@ -462,13 +602,10 @@ class Krylov_forces(Krylov_pre_calc):
 
 
 
-
+        # print(f"Total forces: X= kr:{kr_X} + {pox_X:.2f} N, Y= kr:{kr_Y } + { pod_Y:.2f} N, N= kr:{kr_N } + { pod_N:.2f} Nm")
+        # print(f"urx: {x0_[3]}")
         
-        return (
-            kr_X + pox_X, 
-            kr_Y +pod_Y, 
-            kr_N +pod_N
-        )
+        return kr_X + pox_X, kr_Y +pod_Y, kr_N +pod_N, cns
 
     
     #------------------------------------------------------
@@ -510,8 +647,7 @@ class Krylov_forces(Krylov_pre_calc):
         psi1 = (sd.Ta - sd.Tf) /L # tangent ot static trim angle
 
         # cx0 = self.get_cx0(sd=sd, ship_resistance=sd.ship_resistance, Uchar=Uchar)
-
-        cx0 = np.interp(Uchar, sd.ship_resistance["m/s"] , sd.ship_resistance["ct_kry"]) # interpolierter Widerstand bei speed Uchar
+        cx0 = np.interp(Uchar, sd.ship_resistance["m/s"] , sd.ship_resistance["ct_kry"])  # interpolierter Widerstand bei speed Uchar 
         
         # if sd.noh == 2:
         #     cx0 = RTx0 / (rho * Uchar**2 * sd.S)
@@ -551,6 +687,7 @@ class Krylov_forces(Krylov_pre_calc):
             sigma = 0.975 + 0.054/TmL * psi_res
         elif sd.shiptype == 3:
             sigma = 0.962 + 0.054/ TmL * psi_res
+
         
         # lower limit
         if sigma <= 0.93:
@@ -589,13 +726,13 @@ class Krylov_forces(Krylov_pre_calc):
 
         U = c2_a1 * sigma + c2_b1
 
-        for U in self.c2p["U"].values():
+        for U_ in self.c2p["U"].values():
 
             # print(f"u0: {U['r'][0]}, u1: {U['r'][1]}, x0_3: {x0_[3]}")
 
-            if U["r"][0] <= x0_[3] <= U["r"][1]:
-                c2_a2 = coeffs(x0_[3], *U["a2"])
-                c2_b2 = coeffs(x0_[3], *U["b2"])
+            if U_["r"][0] <= x0_[3] <= U_["r"][1]:
+                c2_a2 = coeffs(x0_[3], *U_["a2"])
+                c2_b2 = coeffs(x0_[3], *U_["b2"])
         
         Q = c2_a2 * (LB) + c2_b2
         c2 = np.clip(c2_a3 * Q + c2_b3, 0.3, 1.6)
@@ -624,13 +761,17 @@ class Krylov_forces(Krylov_pre_calc):
         # cy_beta = self.calc_cy_beta(LB= sd.LB, TmL= sd.TmL, cp= sd.cp, sigma= sigma, beta_eff= beta_eff, beta_eff_sign= beta_eff_sign, c2= c2, c3= c3)
         for lb in self.cy_betap.values():
             if lb["r"][0] <= LB <= lb["r"][1]:
+                a1 = a1_fallback = None
+                b1 = b1_fallback = None
                 for sigmas in lb["sigma"].values():
                     if sigmas["r"][0] is None and sigmas["r"][1] is None:
-                        a1 = coeffs(LB, *sigmas["a1"])
-                        b1 = coeffs(LB, *sigmas["b1"])
+                        a1_fallback = coeffs(LB, *sigmas["a1"])
+                        b1_fallback = coeffs(LB, *sigmas["b1"])
                     elif sigmas["r"][0] <= sigma <= sigmas["r"][1]:
                         a1 = coeffs(LB, *sigmas["a1"])
                         b1 = coeffs(LB, *sigmas["b1"])
+                if a1 is None:
+                    a1, b1 = a1_fallback, b1_fallback
 
         a2 = coeffs(TmL, 16.67, -11.92, 0.06)
         b2 = coeffs(TmL, 261.1, 213.6, 2.468)
@@ -731,6 +872,7 @@ class Krylov_forces(Krylov_pre_calc):
 
         # cn_beta, cxb =  self.calc_cn_beta(cx0 = cx0, beta_eff= beta_eff, m= ms)
         cn_beta = ms[0]*np.sin(2*beta_eff)+ms[1]*np.sin(beta_eff)+ms[2]*(np.sin(2*beta_eff)**3) + ms[3] * (np.sin(2*beta_eff)**5)
+        
 
     
 
@@ -748,7 +890,7 @@ class Krylov_forces(Krylov_pre_calc):
         a1 = 0.09-cnw2 - 0.0033*(LB -7)-20*((TmL-0.005)**2)+ 0.4*(sigma_m34-0.9)+ 0.05*(sd.CM-0.9)
         a2 = 0.008*LB + 0.9 *(TmL -0.05) + 0.45*(sigma_m34-0.955)
 
-        cnw = cnw2 + a1 *abs(np.sin(beta_eff))+ a2 * (1-np.cos( (2*np.pi-4*abs(beta_eff))*np.cos(beta_eff)+0.1*abs(np.sin(2*beta_eff))))
+        cnw = cnw2 + a1 *abs(np.sin(beta_eff))+ a2 * (1-np.cos((2*np.pi-4*abs(beta_eff))*np.cos(beta_eff)+0.1*abs(np.sin(2*beta_eff))))
 
         # omega is rate of turn
 
@@ -758,11 +900,22 @@ class Krylov_forces(Krylov_pre_calc):
         else:
             omega_large = 1.0 
 
+        
+        # according to S.Winkler no negative sign in the first term
+        # cnom = cn0*abs(x0_[5])* x0_[5]*L**2 - cnw/ np.pi*(Uchar**2 +(x0_[5]**2)*L**2)* np.sin(np.pi*omega_large)
         cnom = -cn0*abs(x0_[5])* x0_[5]*L**2 - cnw/ np.pi*(Uchar**2 +(x0_[5]**2)*L**2)* np.sin(np.pi*omega_large)
         
 
         cn = cnom +cn_beta*Uchar**2 # called cn
+        cns = [cn, cnom, cn_beta, Uchar, cn_beta*Uchar**2]
+        # print(f"cn: {cn}, cnom: {cnom}, cn_beta: {cn_beta}, cnb*U: {cn_beta*Uchar**2}, Uchar: {Uchar}")
         # print(f"asigma: {Asigma}, sigma: {sigma}, s: {sd.S}")
+
+        # if self.debug:
+            # print(f"cn_beta: {cn_beta}, ms: {ms}, beta_eff: {beta_eff}")
+            # print(f"cn: {cn:.5f}, cnom: {cnom:.5f}, cn_beta*U²: {cn_beta*Uchar**2:.5f}")
+            # print(f"M_N_hull: {cn * rho*Asigma*L/2:.1f} Nm")
+            # print(f"Asigma: {Asigma:.2f} m², sigma: {sigma:.3f}, LB: {sd.LB:.2f}, TmL: {sd.TmL:.4f}")
 
         Umnos_cn = rho*Asigma*L/2 
         Umnos_fo = rho*Asigma*(Uchar**2)/2
@@ -772,9 +925,10 @@ class Krylov_forces(Krylov_pre_calc):
         # print(f" x {cxb * Umnos_fo     * self.Corr_x},Y: {cy_beta * Umnos_fo * self.Corr_y}, M: {cn * Umnos_cn * self.Corr_n }")
         # correction factor are different to the given krylov code. Original code is is deplayed afterwards
         return (
-            cxb * Umnos_fo     * self.Corr_x,      # corr_n
-            - cy_beta * Umnos_fo * self.Corr_y,      # corr_y # sign changes to match inertial NED cos
-            cn * Umnos_cn * self.Corr_n            # corr_X
+            cxb * Umnos_fo     * self.Corr_y,      # corr_y
+            - cy_beta * Umnos_fo * self.Corr_n,      # corr_n # sign changes to match inertial NED cos
+            cn * Umnos_cn * self.Corr_x,            # corr_X
+            cns
 
         )
     
@@ -798,11 +952,14 @@ class Krylov_forces(Krylov_pre_calc):
 
     
     def eff_drift_angle(self, x0_, eps):
-        
-        if abs(x0_[3]) > eps:
-            beta_eff = np.arctan2(x0_[4],x0_[3])
+
+        uchar = np.sqrt(x0_[3]**2 + x0_[4]**2)
+        if uchar <= eps:
+            beta_eff = 0.0  # stehendes Schiff: kein Driftwinkel
+        elif abs(x0_[3]) > eps:
+            beta_eff = np.arctan2(x0_[4], x0_[3])
         else:
-            beta_eff = np.pi/2 * np.where(x0_[4]>0, 1, -1)
+            beta_eff = np.pi/2 * np.where(x0_[4]>0, 1, -1)  # reine Drift (u≈0, v≠0)
 
         # print(f"beta_eff: {round(beta_eff*180/np.pi, 5)}")<Fuchar
         sign = np.where(beta_eff>0, 1, -1)
@@ -864,165 +1021,169 @@ class Krylov_forces(Krylov_pre_calc):
         Asigma = L * Tm * sigma 
         return sigma, Asigma
 
-    def calc_cs(self, L, B, TmL, c2p, x0_, cp, sigma, LB):    
-        for tml in c2p.values():
-            if "tml" in tml.keys():
-                if tml["tml"][0] <= TmL <= tml["tml"][1]:
-                    c2_a3 = coeffs(TmL, *tml["a3"])
-                    c2_b3 = coeffs(TmL, *tml["b3"])
+    # def calc_cs(self, L, B, TmL, c2p, x0_, cp, sigma, LB):    
+    #     for tml in c2p.values():
+    #         if "tml" in tml.keys():
+    #             if tml["tml"][0] <= TmL <= tml["tml"][1]:
+    #                 c2_a3 = coeffs(TmL, *tml["a3"])
+    #                 c2_b3 = coeffs(TmL, *tml["b3"])
         
-        c2_a1 = 54.46*cp - 59.43
-        c2_b1 = -31.44*cp + 46.8
+    #     c2_a1 = 54.46*cp - 59.43
+    #     c2_b1 = -31.44*cp + 46.8
 
-        U = c2_a1 * sigma + c2_b1
+    #     U = c2_a1 * sigma + c2_b1
 
-        for U in c2p["U"].values():
-            if U["r"][0] <= x0_[3] <= U["r"][1]:
-                c2_a2 = coeffs(x0_[3], *U["a2"])
-                c2_b2 = coeffs(x0_[3], *U["b2"])
+    #     for U in c2p["U"].values():
+    #         if U["r"][0] <= x0_[3] <= U["r"][1]:
+    #             c2_a2 = coeffs(x0_[3], *U["a2"])
+    #             c2_b2 = coeffs(x0_[3], *U["b2"])
         
-        Q = c2_a2 * (L/ B) + c2_b2
-        c2 = np.clip(c2_a3 * Q + c2_b3, 0.3, 1.6)
+    #     Q = c2_a2 * (L/ B) + c2_b2
+    #     c2 = np.clip(c2_a3 * Q + c2_b3, 0.3, 1.6)
 
-        c3_a2 = coeffs(TmL, 2.269, -0.5805, 0.00183)
-        c3_b2 = coeffs(TmL, -27.7, 6.428, -0.01749)
+    #     c3_a2 = coeffs(TmL, 2.269, -0.5805, 0.00183)
+    #     c3_b2 = coeffs(TmL, -27.7, 6.428, -0.01749)
 
-        if cp <= 0.72:
-            c3_a1 = coeffs(cp, 24.65, -29.67, 7.547)
-        elif cp > 0.72:
-            c3_a1 = coeffs(cp, 0, 5.917, 5.3)
+    #     if cp <= 0.72:
+    #         c3_a1 = coeffs(cp, 24.65, -29.67, 7.547)
+    #     elif cp > 0.72:
+    #         c3_a1 = coeffs(cp, 0, 5.917, 5.3)
 
-        if cp <= 0.68:
-            c3_b1 = coeffs(cp, -60.44, 74.61, 9.255)
-        elif cp > 0.68:
-            c3_b1 = coeffs(cp, 0, 10.08, 20.34)
+    #     if cp <= 0.68:
+    #         c3_b1 = coeffs(cp, -60.44, 74.61, 9.255)
+    #     elif cp > 0.68:
+    #         c3_b1 = coeffs(cp, 0, 10.08, 20.34)
 
-        U = c3_a1 * LB + c3_b1
-        c3 = np.clip(c3_a2 * U + c3_b2, 0.0, 0.35)
+    #     U = c3_a1 * LB + c3_b1
+    #     c3 = np.clip(c3_a2 * U + c3_b2, 0.0, 0.35)
 
-        return c2, c3
+    #     return c2, c3
 
-    def calc_cy_beta(self, LB, TmL, cp, sigma, beta_eff, beta_eff_sign, c2, c3):
-        for lb in self.cy_betap.values():
-            if lb["r"][0] <= LB <= lb["r"][1]:
-                for sigmas in lb["sigma"].values():
-                    if sigmas["r"][0] is None and sigmas["r"][1] is None:
-                        a1 = coeffs(LB, *sigmas["a1"])
-                        b1 = coeffs(LB, *sigmas["b1"])
-                    elif sigmas["r"][0] <= sigma <= sigmas["r"][1]:
-                        a1 = coeffs(LB, *sigmas["a1"])
-                        b1 = coeffs(LB, *sigmas["b1"])
+    # def calc_cy_beta(self, LB, TmL, cp, sigma, beta_eff, beta_eff_sign, c2, c3):
+    #     for lb in self.cy_betap.values():
+    #         if lb["r"][0] <= LB <= lb["r"][1]:
+    #             a1 = a1_fallback = None
+    #             b1 = b1_fallback = None
+    #             for sigmas in lb["sigma"].values():
+    #                 if sigmas["r"][0] is None and sigmas["r"][1] is None:
+    #                     a1_fallback = coeffs(LB, *sigmas["a1"])
+    #                     b1_fallback = coeffs(LB, *sigmas["b1"])
+    #                 elif sigmas["r"][0] <= sigma <= sigmas["r"][1]:
+    #                     a1 = coeffs(LB, *sigmas["a1"])
+    #                     b1 = coeffs(LB, *sigmas["b1"])
+    #             if a1 is None:
+    #                 a1, b1 = a1_fallback, b1_fallback
 
-        a2 = coeffs(TmL, 16.67, -11.92, 0.06)
-        b2 = coeffs(TmL, 261.1, 213.6, 2.468)
+    #     a2 = coeffs(TmL, 16.67, -11.92, 0.06)
+    #     b2 = coeffs(TmL, 261.1, 213.6, 2.468)
 
-        a3 = coeffs(cp, 0.2392, -0.4009, 0.1815)
-        b3 = coeffs(cp, 0.4033, -0.6965, 0.3263)
+    #     a3 = coeffs(cp, 0.2392, -0.4009, 0.1815)
+    #     b3 = coeffs(cp, 0.4033, -0.6965, 0.3263)
 
-        U = a1 * LB + b1
-        Q = a2 * U + b2
+    #     U = a1 * LB + b1
+    #     Q = a2 * U + b2
 
-        cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 0.5)
-        cy_beta = 0.5* cy_beta_2 * np.sin(2.* beta_eff)* np.cos(beta_eff) + (c2*(np.sin(beta_eff)**2))+ c3*(np.sin(2*beta_eff)**4)* beta_eff_sign
-        return cy_beta
+    #     cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 0.5)
+    #     cy_beta = 0.5* cy_beta_2 * np.sin(2.* beta_eff)* np.cos(beta_eff) + (c2*(np.sin(beta_eff)**2))+ c3*(np.sin(2*beta_eff)**4)* beta_eff_sign
+    #     return cy_beta
 
 
-    def calc_ms(self, TmL, sigma, LB, cp):
-        # ----m1------
-        a1 = coeffs(TmL, -0.1317, 0.05358, 0.000181)
-        b1 = coeffs(TmL, -2.361, 0.8653, -0.000161)
+    # def calc_ms(self, TmL, sigma, LB, cp):
+    #     # ----m1------
+    #     a1 = coeffs(TmL, -0.1317, 0.05358, 0.000181)
+    #     b1 = coeffs(TmL, -2.361, 0.8653, -0.000161)
 
-        if cp <= 0.72:
-            U0 = coeffs(sigma, -235, 474.2, 235.8)
-            SCP = coeffs(cp, -74.67, 110.9, -39.64)
-        elif cp > 0.72:
-            U0 = coeffs(sigma, -210, 422.9, 207.2)
-            SCP = coeffs(cp, 12, -8.8, -0.64)
+    #     if cp <= 0.72:
+    #         U0 = coeffs(sigma, -235, 474.2, 235.8)
+    #         SCP = coeffs(cp, -74.67, 110.9, -39.64)
+    #     elif cp > 0.72:
+    #         U0 = coeffs(sigma, -210, 422.9, 207.2)
+    #         SCP = coeffs(cp, 12, -8.8, -0.64)
         
-        UUU = U0 + SCP
+    #     UUU = U0 + SCP
 
-        if UUU >= 4:
-            Su = -1.3 * UUU + 7.8
-            Sv0 = coeffs(LB, 0.02333, -0.045, 1.187)
-        else:
-            Su = -1.3 * UUU + 2.6
-            Sv0 = coeffs(LB, 0.02333, -0.045, 1.187) + 0.01 * UUU 
+    #     if UUU >= 4:
+    #         Su = -1.3 * UUU + 7.8
+    #         Sv0 = coeffs(LB, 0.02333, -0.045, 1.187)
+    #     else:
+    #         Su = -1.3 * UUU + 2.6
+    #         Sv0 = coeffs(LB, 0.02333, -0.045, 1.187) + 0.01 * UUU 
 
-        S = Su + Sv0
-        m1 = np.clip(a1 * S + b1,0.02, 0.08)
+    #     S = Su + Sv0
+    #     m1 = np.clip(a1 * S + b1,0.02, 0.08)
 
-        # ----m2------
-        m2 = np.maximum(-(np.log(1.023 * sigma))/ (11.6* sigma -9.29), -0.01)
+    #     # ----m2------
+    #     m2 = np.maximum(-(np.log(1.023 * sigma))/ (11.6* sigma -9.29), -0.01)
 
-        # ----m3------ 
-        sigma = np.maximum(sigma, 1)
+    #     # ----m3------ 
+    #     sigma = np.maximum(sigma, 1)
 
-        a1 = 31.26 -9.0146 * np.exp(0.066947* LB)
-        b1 = 8.6245 * np.exp(0.071419* LB) - 32.26
+    #     a1 = 31.26 -9.0146 * np.exp(0.066947* LB)
+    #     b1 = 8.6245 * np.exp(0.071419* LB) - 32.26
 
-        a2 = (np.exp(8.20939* cp)* 0.7728*0.001-1.873)*0.001
-        b2 = (np.exp(7.47893* cp)*0.4404 * 0.01+5.709)*0.01
+    #     a2 = (np.exp(8.20939* cp)* 0.7728*0.001-1.873)*0.001
+    #     b2 = (np.exp(7.47893* cp)*0.4404 * 0.01+5.709)*0.01
 
-        UUUU = (a1 * sigma + b1)/ (sigma -1.029)
+    #     UUUU = (a1 * sigma + b1)/ (sigma -1.029)
 
-        m3 = np.clip(a2 * UUUU + b2, 0.016, 0.054)
+    #     m3 = np.clip(a2 * UUUU + b2, 0.016, 0.054)
     
-        # ----m4------
-        if TmL <= 0.028:
-            Sm4 = coeffs(TmL, -71.88, 4.238, -0.066)
-        elif 0.028 < TmL <= 0.04:
-            Sm4 = coeffs(TmL, -9.375, 0.8875, 0.0121)
-        else:
-            Sm4 = coeffs(TmL, -3.833, 0.415, -0.01117)
+    #     # ----m4------
+    #     if TmL <= 0.028:
+    #         Sm4 = coeffs(TmL, -71.88, 4.238, -0.066)
+    #     elif 0.028 < TmL <= 0.04:
+    #         Sm4 = coeffs(TmL, -9.375, 0.8875, 0.0121)
+    #     else:
+    #         Sm4 = coeffs(TmL, -3.833, 0.415, -0.01117)
         
-        if 0.55 <= cp <= 0.64:
-            U0 = coeffs(cp, -140.62, 180.62, 53.35)
-        elif 0.64 < cp <= 0.74:
-            U0 = coeffs(cp, -56.67, 75.1, -20.2)
-        else:
-            U0 = coeffs(cp, -216.7, 312.8, 108.51)
+    #     if 0.55 <= cp <= 0.64:
+    #         U0 = coeffs(cp, -140.62, 180.62, 53.35)
+    #     elif 0.64 < cp <= 0.74:
+    #         U0 = coeffs(cp, -56.67, 75.1, -20.2)
+    #     else:
+    #         U0 = coeffs(cp, -216.7, 312.8, 108.51)
         
-        if sigma <= 0.96:
-            Ss = coeffs(sigma, 1900, -3696, 1796)
-        elif sigma > 0.96:
-            Ss = coeffs(sigma, 391.7, -810.4, 415.8)
+    #     if sigma <= 0.96:
+    #         Ss = coeffs(sigma, 1900, -3696, 1796)
+    #     elif sigma > 0.96:
+    #         Ss = coeffs(sigma, 391.7, -810.4, 415.8)
         
-        UUUUU = U0 + Ss
-        Su = 0.00827 * UUUUU - 0.017
+    #     UUUUU = U0 + Ss
+    #     Su = 0.00827 * UUUUU - 0.017
 
-        m4 = np.clip(Sm4 + Su, 0.03, 0.04)
+    #     m4 = np.clip(Sm4 + Su, 0.03, 0.04)
 
-        return [m1, m2, m3, m4]
+    #     return [m1, m2, m3, m4]
 
-    def calc_cn_beta(self, cx0, beta_eff, m):
-        beta = beta_eff
-        cn_beta = m[0]*np.sin(2*beta)+m[1]*np.sin(beta)+m[2]*(np.sin(2*beta)**3) + m[3] * (np.sin(2*beta)**5)
-        # if cx0/self.kp['a1x'] > 1 or cx0/self.kp['a1x'] < -1:
-            # print(f"Invalid arcsin input: {cx0/self.kp['a1x']}, {cx0}, {self.kp['a1x']}")
+    # def calc_cn_beta(self, cx0, beta_eff, m):
+    #     beta = beta_eff
+    #     cn_beta = m[0]*np.sin(2*beta)+m[1]*np.sin(beta)+m[2]*(np.sin(2*beta)**3) + m[3] * (np.sin(2*beta)**5)
+    #     # if cx0/self.kp['a1x'] > 1 or cx0/self.kp['a1x'] < -1:
+    #         # print(f"Invalid arcsin input: {cx0/self.kp['a1x']}, {cx0}, {self.kp['a1x']}")
 
-        cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
-        return cn_beta, cxb
+    #     cxb = -self.kp["a1x"] * np.sin((np.pi-np.arcsin(cx0/self.kp["a1x"]))*(1-(abs(beta)*180/np.pi/self.kp["psix"])))
+    #     return cn_beta, cxb
     
-    def calc_cn(self, x0_, sd, c2, cn_beta, beta_eff, Tml, sigma, LB, Uchar, eps):
-        cn0 = 0.059*c2
-        cnw2= (0.739 +8.7 * Tml)*(1.611*(sigma**2)-2.873*sigma+1.33)
+    # def calc_cn(self, x0_, sd, c2, cn_beta, beta_eff, Tml, sigma, LB, Uchar, eps):
+    #     cn0 = 0.059*c2
+    #     cnw2= (0.739 +8.7 * Tml)*(1.611*(sigma**2)-2.873*sigma+1.33)
 
-        a1 = 0.09-cnw2 - 0.0033*(LB -7)-20*((Tml-0.005)**2)+ 0.4*(sigma-0.9)+ 0.05*(sd.CM-0.9)
-        a2 = 0.008*LB + 0.9 *(Tml -0.05) + 0.45*(sigma-0.955)
+    #     a1 = 0.09-cnw2 - 0.0033*(LB -7)-20*((Tml-0.005)**2)+ 0.4*(sigma-0.9)+ 0.05*(sd.CM-0.9)
+    #     a2 = 0.008*LB + 0.9 *(Tml -0.05) + 0.45*(sigma-0.955)
 
-        cnw = cnw2 + a1 *abs(np.sin(beta_eff))+ a2 * (1-np.cos( (2*np.pi-4*abs(beta_eff))*np.cos(beta_eff)+0.1*abs(np.sin(2*beta_eff))))
+    #     cnw = cnw2 + a1 *abs(np.sin(beta_eff))+ a2 * (1-np.cos( (2*np.pi-4*abs(beta_eff))*np.cos(beta_eff)+0.1*abs(np.sin(2*beta_eff))))
 
-        # omega is rate of turn
+    #     # omega is rate of turn
 
-        if Uchar > eps:
-            omega_strich = x0_[5] * sd.L/ Uchar
-            omega_large = omega_strich /np.sqrt(1+omega_strich**2)
-        else:
-            omega_large = 1.0 
+    #     if Uchar > eps:
+    #         omega_strich = x0_[5] * sd.L/ Uchar
+    #         omega_large = omega_strich /np.sqrt(1+omega_strich**2)
+    #     else:
+    #         omega_large = 1.0 
 
-        cnom = -cn0*abs(x0_[5])* x0_[5]*sd.L**2 - cnw/ np.pi*(Uchar**2 +(x0_[5]**2)*sd.L**2)* np.sin(np.pi*omega_large)
+    #     cnom = -cn0*abs(x0_[5])* x0_[5]*sd.L**2 - cnw/ np.pi*(Uchar**2 +(x0_[5]**2)*sd.L**2)* np.sin(np.pi*omega_large)
 
-        return cnom +cn_beta*Uchar**2 # called cn
+    #     return cnom +cn_beta*Uchar**2 # called cn
 
     # End Krylov Force
     #------------------------------------------------------
@@ -1102,7 +1263,8 @@ class Krylov_forces(Krylov_pre_calc):
                 # print(f"pod {i}, J: {J}, Kt: {Kt}")
 
                 Thr[i] = Kt * sd.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
-                # print(f"pod {i}, J: {J}, Kt: {Kt}", f"Thr: {Thr[i]}, N: {N[i]}")
+                if self.debug:
+                    print(f"  pod {i}: N={N[i]*60:.1f} RPM, J={J:.3f} (clip=[{J_min:.2f},{J_max:.2f}]), KT={Kt:.4f}, T={Thr[i]:.1f} N")
         
         if pod == 1:
             # cyvondr, cnvondr  = 0., 0. # only needed in fortran code
@@ -1127,7 +1289,9 @@ class Krylov_forces(Krylov_pre_calc):
         else:
             print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
             X_pod, Y_pod, N_pod = 0, 0, 0
-
+        # print(f"delta_r: {input_values[2:]}, Thr: {Thr}")
+        if self.debug:
+            print(f"  pod total: X={X_pod:.1f} N, Y={Y_pod:.1f} N, N={N_pod:.1f} Nm, urx={urx:.2f} m/s")
         return [X_pod, Y_pod, N_pod]
 
     def calc_windforces(self, uwind, wind_dir, rho_air, Ax, Ay, L, x0_, cxw = 0, cyw = 0, cnw = 0):
@@ -1294,24 +1458,24 @@ if __name__ == "__main__":
 
 
 
-    # fig_2 = df.plot(x="y0", y="x0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
-    # fig_3 = df.plot(x=df.index, y="u", kind="line", title="u", labels={"u": "u"})
-    # fig_4 = df.plot(x=df.index, y="psi", kind="line", title="psi", labels={"psi": "psi"})
-    # fig_2.update_yaxes(
-    #         scaleanchor="x",
-    #         scaleratio=1
-    #         )   
-    # fig_2.update_xaxes(constrain="domain")
-    # fig_2.update_layout(
-    #     width=600,
-    #     height=600,
-    #     title={
-    #         'text': "Trajectory",
-    #         'y':0.9,
-    #         'x':0.5,
-    #         'xanchor': 'center',
-    #         'yanchor': 'top'})
-    # fig_2.show()
+    fig_2 = df.plot(x="y0", y="x0", kind="line", title="trajectory", labels={"x0": "x", "y0": "y"})
+    fig_3 = df.plot(x=df.index, y="u", kind="line", title="u", labels={"u": "u"})
+    fig_4 = df.plot(x=df.index, y="psi", kind="line", title="psi", labels={"psi": "psi"})
+    fig_2.update_yaxes(
+            scaleanchor="x",
+            scaleratio=1
+            )   
+    fig_2.update_xaxes(constrain="domain")
+    fig_2.update_layout(
+        width=600,
+        height=600,
+        title={
+            'text': "Trajectory",
+            'y':0.9,
+            'x':0.5,
+            'xanchor': 'center',
+            'yanchor': 'top'})
+    fig_2.show()
     # fig_3.show()
     # fig_4.show()
     print(df.head(-50))

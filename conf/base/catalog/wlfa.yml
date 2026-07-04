@@ -12,6 +12,12 @@ wlfa.ship_resistance_HM:
   load_args:
     encoding: "utf-8"
 
+wlfa.ship_resistance_oestermann:
+  type: pandas.CSVDataSet
+  filepath: data/01_raw/wlfa/oestermann_resi.csv
+  load_args:
+    encoding: "utf-8"
+
 wlfa.prop_openwater:
   type: pandas.CSVDataSet
   filepath: data/01_raw/wlfa/freif.inp

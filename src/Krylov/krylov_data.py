@@ -79,18 +79,20 @@ class ShipConfig:
         self.S = self.scale_dim(self.S, 2)
         self.lcg = self.scale_dim(self.lcg, 1)
         self.volume = self.scale_dim(self.volume, 3)
-        self.I_z = self.scale_dim(self.I_z, 4) # need to be checked
+        self.I_z = self.scale_dim(self.I_z, 3) # need to be checked
         self.askeg = self.scale_dim(self.askeg, 2)
 
-        # if self.noh == 2:
-        #     self.LB = self.L/(self.B+self.dbh)
-        # else:
-        self.LB = self.L / self.B
+        if self.noh == 2:
+            # self.LB = self.L/(self.B+self.dbh)
+            self.LB = self.L / self.B
+        else:
+            self.LB = self.L / self.B
 
 
         self.m = self.volume*self.rho
         self.TmL = self.Tm / self.L 
-        self.xtg = self.lcg/self.L # lcg in per from ap
+        # self.xtg = self.lcg/self.L # lcg in per from ap
+        self.xtg = self.lcg/self.L -0.5
 
         # if self.LB > 11:
         #      raise ValueError(f"LB must be <= 11 {self.LB} for ship {self.shiptype}")
