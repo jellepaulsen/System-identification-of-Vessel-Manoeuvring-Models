@@ -92,6 +92,10 @@ class Krylov_pre_calc:
         self.psi2p = self.kp["psi_2"] # psi_2 parameters
         self.c2p = self.kp["c_2"] # c_2 parameters
         self.cy_betap = self.kp["cy_beta"] # cy_beta parameters
+        # Kalibrierungsfaktoren auf die Rumpfkraefte (aus Trial-Abgleich, siehe krylov.yml)
+        self.k_x = self.kp.get("k_x", 1.0)
+        self.k_y = self.kp.get("k_y", 1.0)
+        self.k_n = self.kp.get("k_n", 1.0)
         self.hydro_mass()
 
     def hydro_mass(self):
@@ -123,7 +127,7 @@ class Krylov_pre_calc:
             volume = self.sd.L*self.sd.B*self.sd.Tm*self.sd.CB
             self.hydro_mass_dict["m11"] = m11 * Akxx
             self.hydro_mass_dict["m22"] = m22 * Akyy
-            self.hydro_mass_dict["m66"] = Akyy*(m66+((self.sd.dbh/2.0)**2)*m22)+Akxx*((self.sd.dbh/2.0)**2)*m11 
+            # self.hydro_mass_dict["m66"] = Akyy*(m66+((self.sd.dbh/2.0)**2)*m22)+Akxx*((self.sd.dbh/2.0)**2)*m11 
             
             self.hydro_mass_dict["izz"] = 409355 # 11115 fixed value for catamaran no idea about dimension 
             self.hydro_mass_dict["m66"] = self.hydro_mass_dict["izz"] *0.7
@@ -366,12 +370,16 @@ class Krylov_forces(Krylov_pre_calc):
 
 
         # print(F"psi: {sol.y[2, -20:]}\n u: {sol.y[3, -20:]}\n v: {sol.y[4, -20:]}\n r: {sol.y[5, -20:]}\n")
+        # zero-order-hold resample of the inputs onto the output grid,
+        # same rule the rhs applies during integration
+        input_idx = np.clip(np.searchsorted(t_input, t_eval, side="right") - 1, 0, None)
+
         df_sim = pd.DataFrame(sol.y.T, columns=state_columns, index=t_eval)
-        df_input = pd.DataFrame(input_data, columns=input_columns, index=t_eval)
+        df_input = pd.DataFrame(input_data[input_idx], columns=input_columns, index=t_eval)
 
         forces_list = []
         for k, t_i in enumerate(t_eval):
-            idx = np.searchsorted(t_input, t_i, side="right") - 1
+            idx = input_idx[k]
             x0_k = sol.y[:, k]
             inp_k = input_data[idx]
             beta_eff, beta_eff_sign = self.eff_drift_angle(x0_k, eps)
@@ -588,7 +596,8 @@ class Krylov_forces(Krylov_pre_calc):
         # print(f"Calculating forces for state: {x0_}, beta_eff: {beta_eff}, beta_eff_sign: {beta_eff_sign}")
         # x0_ = self.wave_induced_velocities(x0_)
         kr_X, kr_Y, kr_N, cns = self.krylov_force(x0_, sd, beta_eff, beta_eff_sign, eps)
-        pox_X, pod_Y, pod_N = self.calc_pod_forces(
+        pod_X, pod_Y, pod_N = self.calc_pod_forces(
+        # pod_X, pod_Y, pod_N = self.calc_pod_rud_force(
                         input = input,
                         input_columns = input_columns,
                         sd = sd,
@@ -605,7 +614,7 @@ class Krylov_forces(Krylov_pre_calc):
         # print(f"Total forces: X= kr:{kr_X} + {pox_X:.2f} N, Y= kr:{kr_Y } + { pod_Y:.2f} N, N= kr:{kr_N } + { pod_N:.2f} Nm")
         # print(f"urx: {x0_[3]}")
         
-        return kr_X + pox_X, kr_Y +pod_Y, kr_N +pod_N, cns
+        return kr_X + pod_X, kr_Y +pod_Y, kr_N +pod_N, cns
 
     
     #------------------------------------------------------
@@ -896,7 +905,7 @@ class Krylov_forces(Krylov_pre_calc):
 
         if Uchar > eps:
             omega_strich = x0_[5] * L/ Uchar
-            omega_large = omega_strich /np.sqrt(1+omega_strich**2)
+            omega_large = omega_strich /np.sqrt(1+omega_strich**2) 
         else:
             omega_large = 1.0 
 
@@ -925,9 +934,9 @@ class Krylov_forces(Krylov_pre_calc):
         # print(f" x {cxb * Umnos_fo     * self.Corr_x},Y: {cy_beta * Umnos_fo * self.Corr_y}, M: {cn * Umnos_cn * self.Corr_n }")
         # correction factor are different to the given krylov code. Original code is is deplayed afterwards
         return (
-            cxb * Umnos_fo     * self.Corr_y,      # corr_y
-            - cy_beta * Umnos_fo * self.Corr_n,      # corr_n # sign changes to match inertial NED cos
-            cn * Umnos_cn * self.Corr_x,            # corr_X
+            self.k_x * cxb * Umnos_fo     * self.Corr_y,      # corr_y
+            self.k_y * cy_beta * Umnos_fo * self.Corr_n,      # corr_n
+            self.k_n * cn * Umnos_cn * self.Corr_x,            # corr_X
             cns
 
         )
@@ -957,9 +966,9 @@ class Krylov_forces(Krylov_pre_calc):
         if uchar <= eps:
             beta_eff = 0.0  # stehendes Schiff: kein Driftwinkel
         elif abs(x0_[3]) > eps:
-            beta_eff = np.arctan2(x0_[4], x0_[3])
+            beta_eff = - np.arctan2(x0_[4], x0_[3])
         else:
-            beta_eff = np.pi/2 * np.where(x0_[4]>0, 1, -1)  # reine Drift (u≈0, v≠0)
+            beta_eff = - np.pi/2 * np.where(x0_[4]>0, 1, -1)  # reine Drift (u≈0, v≠0)
 
         # print(f"beta_eff: {round(beta_eff*180/np.pi, 5)}")<Fuchar
         sign = np.where(beta_eff>0, 1, -1)
@@ -1290,6 +1299,111 @@ class Krylov_forces(Krylov_pre_calc):
             print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
             X_pod, Y_pod, N_pod = 0, 0, 0
         # print(f"delta_r: {input_values[2:]}, Thr: {Thr}")
+        if self.debug:
+            print(f"  pod total: X={X_pod:.1f} N, Y={Y_pod:.1f} N, N={N_pod:.1f} Nm, urx={urx:.2f} m/s")
+        return [X_pod, Y_pod, N_pod]
+
+    def calc_pod_rud_force(self, input: np.ndarray, input_columns: list, sd: ShipConfig, urx: float):
+        """Pod-Kraefte inkl. Ruderkraft-Abschaetzung.
+
+        Wie calc_pod_forces (Schubvektor T*cos/sin(delta)), zusaetzlich wirkt das
+        Pod-Gehaeuse + Flosse als Tragfluegel:
+
+            F_N = 0.5 * rho * A_R * u_eff^2 * f_alpha * sin(delta)
+
+        mit f_alpha = 6.13*Lambda/(Lambda+2.25) (Auftriebsgradient nach Soeding,
+        Lambda = H_R^2/A_R effektive Streckung) und u_eff der Anstroemung am Pod:
+        Nachstrom-reduzierte Fahrt, durch den Propellerstrahl beschleunigt
+        (Impulstheorie: u_eff^2 = (u*(1-w))^2 + 8*T/(rho*pi*D_p^2)).
+
+        Gleiche Signatur und Rueckgabe wie calc_pod_forces, damit sie an den
+        Aufrufstellen 1:1 austauschbar ist.
+        """
+        pod = sd.pod
+        dbh = sd.dbh
+        lop = sd.lop
+        lcg = sd.lcg
+        w = sd.w
+        D_p = sd.D_p
+        prop_openwater = sd.prop_openwater
+
+        if isinstance(input, pd.DataFrame):
+            input_values = input.loc[:, input_columns].iloc[0].to_numpy(dtype=float)
+        elif isinstance(input, pd.Series):
+            input_values = input.loc[input_columns].to_numpy(dtype=float)
+        else:
+            input_values = np.asarray(input, dtype=float)
+
+        input_values = np.ravel(input_values)
+        if input_values.size < 4:
+            raise ValueError(
+                f"calc_pod_rud_force expected at least 4 input values, got {input_values.size}"
+            )
+
+        N = input_values[:2] / 60
+        Thr = [0.0] * len(N)
+
+        if len(Thr) == 1:
+            print(f"NOT implemented yet!")
+        elif len(Thr) == 2:
+            J_min = prop_openwater["J"].iloc[0]
+            J_max = prop_openwater["J"].iloc[-1]
+            for i, n in enumerate(N):
+                if abs(n) < self.eps:
+                    Thr[i] = 0.0
+                    continue
+                J = (urx * (1 - w)) / (n * D_p)
+                J = np.clip(J, J_min, J_max)
+                Kt = np.interp(J, prop_openwater["J"], prop_openwater["KT"])
+                Kt = max(Kt, 0.0)  # kein negativer Schub durch J-Extrapolation
+                Thr[i] = Kt * sd.rho * (N[i]**2)*(D_p**4)* np.where(N[i]>= 0, 1.0, -1.0)
+                if self.debug:
+                    print(f"  pod {i}: N={N[i]*60:.1f} RPM, J={J:.3f} (clip=[{J_min:.2f},{J_max:.2f}]), KT={Kt:.4f}, T={Thr[i]:.1f} N")
+
+        if pod == 1:
+            X_pod, Y_pod, N_pod = 0, 0, 0
+            for i, T in enumerate(Thr):
+                delta_i = input_values[2+i]
+
+                # Anstroemung am Pod: Nachstrom + Propellerstrahl (Impulstheorie)
+                u_p = urx * (1 - w)
+                u_eff2 = u_p**2
+                if T > 0:
+                    u_eff2 += 8.0 * T / (sd.rho * np.pi * D_p**2)
+
+                X_lift, Y_lift = 0.0, 0.0
+                if sd.A_R and sd.H_R:
+                    asp = sd.H_R**2 / sd.A_R                # effektive Streckung
+                    f_alpha = 6.13 * asp / (asp + 2.25)     # Auftriebsgradient nach Soeding
+                    F_N = 0.5 * sd.rho * sd.A_R * u_eff2 * f_alpha * math.sin(delta_i)
+                    X_lift = -F_N * math.sin(delta_i)       # induzierter Widerstand
+                    Y_lift = F_N * math.cos(delta_i)        # gleiche Vorzeichenkonvention wie Schubvektor
+
+
+                print(f"  pod {i}: T={T:.1f} N, delta={math.degrees(delta_i):.1f} deg, u_eff={np.sqrt(u_eff2):.2f} m/s, Y_thrust={T*math.sin(delta_i):.1f} N, Y_lift={Y_lift:.1f} N")
+                
+                X_i = T * math.cos(delta_i) + X_lift
+                Y_i = T * math.sin(delta_i) + Y_lift
+                X_pod += X_i
+                Y_pod += Y_i
+
+                if len(Thr) == 2:
+                    dbh2 = {
+                        "stb": dbh/2,
+                        "ps": -dbh/2
+                        }.get(lop[i], 0)
+                    if lcg == 0:
+                        print("lcg = zero, please check ship_data.yml")
+
+                    # N = x*Fy - y*Fx mit Pod bei (x=-lcg, y=dbh2); fuer reinen Schub
+                    # identisch zu h = sqrt(lcg^2+dbh2^2)*sin(delta+atan(dbh2/lcg))
+                    N_pod -= Y_i * lcg + X_i * dbh2  # positive rudder angle results in negative moment (turning to port)
+                if self.debug:
+                    print(f"  pod {i}: T={T:.1f} N, delta={math.degrees(delta_i):.1f} deg, u_eff={np.sqrt(u_eff2):.2f} m/s, Y_thrust={T*math.sin(delta_i):.1f} N, Y_lift={Y_lift:.1f} N")
+        else:
+            print("Rudder forces only implemented for podthrusters, not for shaftline propellers")
+            X_pod, Y_pod, N_pod = 0, 0, 0
+        
         if self.debug:
             print(f"  pod total: X={X_pod:.1f} N, Y={Y_pod:.1f} N, N={N_pod:.1f} Nm, urx={urx:.2f} m/s")
         return [X_pod, Y_pod, N_pod]

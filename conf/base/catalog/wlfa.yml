@@ -48,3 +48,7 @@ wlfa.ZZ_5.0_10.0_b_190.0_35.0_rpm_stb_turn:
 wlfa.segmentation:
   type: pandas.ParquetDataSet
   filepath: data/02_intermediate/wlfa/segments_enriched.parquet
+
+wlfa.TC_20.0_nan_b_10.0_35.0_rpm_stb_turn:
+  type: pandas.ParquetDataSet
+  filepath: data/03_primary/wlfa/TC_20.0_nan_b_10.0_35.0_rpm_stb_turn.parquet

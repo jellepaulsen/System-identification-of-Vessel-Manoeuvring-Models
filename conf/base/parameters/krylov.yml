@@ -8,6 +8,16 @@ C :      1.0             # Lewis coefficient
 a1x: 0.075
 psix: 90
 
+# Kalibrierungsfaktoren auf die Krylov-Rumpfkraefte (X, Y, N),
+# bestimmt aus Drehkreis TC 20deg stb (TC_20.0_nan_b_10.0_35.0_rpm_stb_turn):
+# Simulation mit echten rpm/azimuth-Kanaelen, stationaer r=+3.54 (real +3.57) deg/s,
+# U=1.67 (real 1.61) m/s, beta~7deg.
+# Nur gueltig zusammen mit calc_pod_rud_force und A_R=0.0539, H_R=0.5!
+# Zum Vergleich Zigzag 10/10: k_x=1.09, k_n=0.53 (k_n ist regimeabhaengig!)
+k_x: 0.9
+k_y: 0.4 # aus TC-Querbilanz; beim Zigzag nicht identifizierbar
+k_n: 0.15
+
 
 
 
