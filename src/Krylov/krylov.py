@@ -13,6 +13,7 @@ import cProfile
 
 from dataclasses import dataclass
 from Krylov.krylov_data import ShipConfig
+from Krylov.abkowitz import make_abkowitz_rhs
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 
@@ -398,7 +399,50 @@ class Krylov_forces(Krylov_pre_calc):
                                  index=t_eval)
 
         return pd.concat([df_sim, df_input, df_forces], axis=1)
-    
+
+
+    @timer
+    def simulate_abkowitz(self, x0_, coeff_path: str):
+        '''
+        Simulation mit einem Abkowitz-Polynommodell statt der Krylov-Kraefte.
+        coeff_path: YAML mit den Prime-Koeffizienten (siehe abkowitz.py)
+        '''
+        print("Initializing simulation with Abkowitz model...")
+        with open(coeff_path) as f:
+            coeffs = yaml.safe_load(f)
+
+        t_input = self.data.index.to_numpy()
+        input_data = self.data[self.input_columns].to_numpy()
+
+        rhs, forces_dim = make_abkowitz_rhs(
+            coeffs=coeffs,
+            sd=self.sd,
+            izz=self.hydro_mass_dict["izz"],
+            input_data=input_data,
+            t_input=t_input,
+            eps=self.eps,
+        )
+
+        t_span = [t_input.min(), t_input.max()]
+        dt_out = 0.01  # fixed 100 Hz output, same as simulate()
+        n_out = max(2, int(round((t_span[1] - t_span[0]) / dt_out)) + 1)
+        t_eval = np.linspace(t_span[0], t_span[1], n_out)
+
+        print("Starting integration...")
+        sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='Radau')
+        print("Integration completed.")
+        if not sol.success:
+            print("Integration failed:", sol.message)
+
+        input_idx = np.clip(np.searchsorted(t_input, t_eval, side="right") - 1, 0, None)
+        df_sim = pd.DataFrame(sol.y.T, columns=self.state_columns, index=t_eval)
+        df_input = pd.DataFrame(input_data[input_idx], columns=self.input_columns, index=t_eval)
+
+        forces_list = [forces_dim(t_i, sol.y[:, k]) for k, t_i in enumerate(t_eval)]
+        df_forces = pd.DataFrame(forces_list, columns=["F_X", "F_Y", "M_N"], index=t_eval)
+
+        return pd.concat([df_sim, df_input, df_forces], axis=1)
+
 
     def _make_rhs_with_input(self, N: float, delta_r: float):
         """Build an rhs(t, y) closure for a fixed propeller RPM and rudder angle."""
@@ -536,6 +580,7 @@ class Krylov_forces(Krylov_pre_calc):
 
         F_X, F_Y, M_N = sp.symbols('F_X F_Y M_N')
         m_x, m_y, m_n = sp.symbols('m_x m_y m_n')
+        m, x_g = sp.symbols('m x_g')  # center of gravity coordinates
         # dt = sp.symbols('dt')
         x0, y0, psi, u, v, r = sp.symbols('x0 y0 psi u v r')
         if name == "krylov":
@@ -552,8 +597,8 @@ class Krylov_forces(Krylov_pre_calc):
                 (u * sp.cos(psi) - v * sp.sin(psi)),
                 (u* sp.sin(psi) + v * sp.cos(psi)),
                 r,
-                (F_X + m_y*r*v)/ m_x,
-                (-m_x*r*u + F_Y)/m_y,
+                (F_X/ m + r*v+x_g*r**2),
+                (F_Y/m -u*r-x_g*r_dot**2),
                 M_N / m_n
             ])
 
