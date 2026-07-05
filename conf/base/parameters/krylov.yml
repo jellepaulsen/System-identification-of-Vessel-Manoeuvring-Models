@@ -14,9 +14,9 @@ psix: 90
 # U=1.67 (real 1.61) m/s, beta~7deg.
 # Nur gueltig zusammen mit calc_pod_rud_force und A_R=0.0539, H_R=0.5!
 # Zum Vergleich Zigzag 10/10: k_x=1.09, k_n=0.53 (k_n ist regimeabhaengig!)
-k_x: 0.9
-k_y: 0.4 # aus TC-Querbilanz; beim Zigzag nicht identifizierbar
-k_n: 0.15
+k_x: 0.935
+k_y: 5.562
+k_n: 0.311
 
 
 
@@ -151,7 +151,7 @@ cy_beta:
         a1: [0, -0.5, -0.485]
         b1: [513.7, -1032, 523.7]
   lb_3:
-    r: [8, 12] # changed from 11 to get results for bigger LB, bacouse the wlfa ship has LB = 11.8
+    r: [8, 12] # changed from 11 to get results for bigger LB, because the wlfa ship has LB = 11.8
     sigma:
       sgm_1:
         r: [0.93, 0.95]

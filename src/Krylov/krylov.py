@@ -127,10 +127,10 @@ class Krylov_pre_calc:
             volume = self.sd.L*self.sd.B*self.sd.Tm*self.sd.CB
             self.hydro_mass_dict["m11"] = m11 * Akxx
             self.hydro_mass_dict["m22"] = m22 * Akyy
-            # self.hydro_mass_dict["m66"] = Akyy*(m66+((self.sd.dbh/2.0)**2)*m22)+Akxx*((self.sd.dbh/2.0)**2)*m11 
+            self.hydro_mass_dict["m66"] = Akyy*(m66+((self.sd.dbh/2.0)**2)*m22)+Akxx*((self.sd.dbh/2.0)**2)*m11 
             
             self.hydro_mass_dict["izz"] = 409355 # 11115 fixed value for catamaran no idea about dimension 
-            self.hydro_mass_dict["m66"] = self.hydro_mass_dict["izz"] *0.7
+            # self.hydro_mass_dict["m66"] = self.hydro_mass_dict["izz"] *0.7
             print(f"m11: {self.hydro_mass_dict['m11']:.2f}, m22: {self.hydro_mass_dict['m22']:.2f}, m66: {self.hydro_mass_dict['m66']:.2f}, izz: {self.hydro_mass_dict['izz']:.2f}")
         else: 
             volume = self.sd.CB * self.sd.L * self.sd.B * self.sd.Tm
@@ -531,23 +531,32 @@ class Krylov_forces(Krylov_pre_calc):
         print("Zigzag simulation completed.")
         return pd.concat([df_sim, df_input, df_forces, df_phase], axis=1)
 
-    def equations(self):
+    def equations(self, name: str= "krylov"):
         # movement equations for the forces, to be simplified and lambdified with sympy
 
         F_X, F_Y, M_N = sp.symbols('F_X F_Y M_N')
         m_x, m_y, m_n = sp.symbols('m_x m_y m_n')
         # dt = sp.symbols('dt')
         x0, y0, psi, u, v, r = sp.symbols('x0 y0 psi u v r')
-        
-        rhs_sym = sp.Matrix([
-                    (u * sp.cos(psi) - v * sp.sin(psi)),
-                    (u* sp.sin(psi) + v * sp.cos(psi)),
-                    r,
-                    (F_X + m_y*r*v)/ m_x,
-                    (-m_x*r*u + F_Y)/m_y,
-                    M_N / m_n
-                ])
-        
+        if name == "krylov":
+            rhs_sym = sp.Matrix([
+                (u * sp.cos(psi) - v * sp.sin(psi)),
+                (u* sp.sin(psi) + v * sp.cos(psi)),
+                r,
+                (F_X + m_y*r*v)/ m_x,
+                (-m_x*r*u + F_Y)/m_y,
+                M_N / m_n
+            ])
+        elif name == "Winkler":
+            rhs_sym = sp.Matrix([
+                (u * sp.cos(psi) - v * sp.sin(psi)),
+                (u* sp.sin(psi) + v * sp.cos(psi)),
+                r,
+                (F_X + m_y*r*v)/ m_x,
+                (-m_x*r*u + F_Y)/m_y,
+                M_N / m_n
+            ])
+
         rhs_sym = rhs_sym.subs({
             m_x: self.hydro_mass_dict["m11"] + self.sd.m,
             m_y: self.hydro_mass_dict["m22"] + self.sd.m,
@@ -791,7 +800,9 @@ class Krylov_forces(Krylov_pre_calc):
         U_2 = a1 * LB + b1
         Q = a2 * U_2 + b2
 
-        cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 0.5)
+        # cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 0.5)
+        cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 1)
+        print(f"cy_beta_2: {cy_beta_2}")
         cy_beta = 0.5* cy_beta_2 * np.sin(2.* beta_eff)* np.cos(beta_eff) + (c2*(np.sin(beta_eff)**2)+ c3*(np.sin(2*beta_eff)**4))* beta_eff_sign
         
         term1 = cy_beta_2 * np.sin(2*beta_eff) * np.cos(beta_eff)
