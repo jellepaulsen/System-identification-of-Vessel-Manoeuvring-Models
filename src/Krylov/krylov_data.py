@@ -49,6 +49,13 @@ class ShipConfig:
     rho: Optional[float] = None
     A_R: Optional[float] = None
 
+    # wind (coefficients from ship_data.yml, projected areas in m^2)
+    C_x_w: Optional[float] = None
+    C_y_w: Optional[float] = None
+    C_n_w: Optional[float] = None
+    A_x: Optional[float] = None
+    A_y: Optional[float] = None
+
     nop: Optional[int] = None
     lop: Optional[List[str]] = None
 

@@ -11,9 +11,7 @@ matplotlib.use('QtAgg')  # kein GUI-Fenster, nur Dateien speichern
 import matplotlib.pyplot as plt
 import cProfile
 
-from dataclasses import dataclass
 from Krylov.krylov_data import ShipConfig
-from Krylov.abkowitz import make_abkowitz_rhs
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 
@@ -72,17 +70,6 @@ def get_test_input(
 
 
 
-
-
-@dataclass
-class ZigzagConfig:
-    N: float          # propeller RPM
-    delta_deg: float  # rudder angle magnitude [deg]
-    psi_des: float    # heading threshold per side [deg]
-    n_switches: int   # number of rudder reversals
-    t0: float         # pre-maneuver acceleration time [s]
-    t_aft: float      # coast-down duration after last switch [s]
-    dt: float = 0.5   # output timestep [s]
 
 
 class Krylov_pre_calc:
@@ -167,6 +154,17 @@ class Krylov_forces(Krylov_pre_calc):
         # states = data[state_columns]
         # input = data[input_columns]
         self.data = data
+
+        # Wind: ueber das Trial gemittelt aus den Messkanaelen (rad, m/s).
+        # Richtung als zirkulaeres Mittel (arithmetisch waere bei +-pi falsch).
+        self.rho_air = 1.225
+        self.uwind = 0.0
+        self.wind_dir = 0.0
+        if data is not None and "wind_speed_meters" in data.columns and "direction_true" in data.columns:
+            self.uwind = float(data["wind_speed_meters"].mean())
+            wd = data["direction_true"].to_numpy(dtype=float)
+            self.wind_dir = float(np.arctan2(np.mean(np.sin(wd)), np.mean(np.cos(wd))))
+            print(f"Wind aus Trial: uwind={self.uwind:.2f} m/s, dir={math.degrees(self.wind_dir):.1f} deg")
         self.input_columns = input_columns
         self.state_columns = state_columns
         sd = self.sd
@@ -301,280 +299,6 @@ class Krylov_forces(Krylov_pre_calc):
 
         return wrapper
     
-    @timer
-    def simulate(self, x0_):
-        '''
-        input columns: N und Delta_r
-        state columns: x0, y0, psi, u, v, r
-        x0_: initial state for the integration
-        data: DataFrame with the input data, index should be time and columns should include the input_columns and state_columns
-        '''
-        print("Initializing simulation with Krylov forces...")
-        sd = self.sd
-        eps = self.eps
-        input_columns = self.input_columns
-        state_columns = self.state_columns
-        # translate to numpy to gain performance
-        t_input = self.data.index.to_numpy()
-        input_data = self.data[input_columns].to_numpy()
-
-
-        n_y = len(state_columns) + 3 # length of input_array for rhs
-        y_ = np.empty(n_y) # state + forces
-
-        rhs_sym = self.equations()
-
-        rhs_input = state_columns + ["F_X", "F_Y", "M_N"]
-
-        rhs_func = sp.lambdify(rhs_input, rhs_sym, modules="numpy")
-
-        # build interpolation fuctions 
-        # RT_interp = interp1d(sd.ship_resistance["m/s"], sd.ship_resistance["kN"], kind="cubic", fill_value="extrapolate")
-
-        rhs = self.make_rhs(rhs_func = rhs_func, 
-                            input = input_data, 
-                            input_id = t_input, 
-                            input_columns = input_columns, 
-                            state_columns = state_columns, 
-                            y_array = y_, 
-                            sd = sd, 
-                            eps = eps)
-
-
-
-        
-
-        # here the integration of the rhs function needs to be implemented, e.g. with scipy solve_ivp or a custom implementation
-        # the output should be a DataFrame with the same columns as state_columns and the same index as data
-        
-        t = self.data.index
-        t_span = [t.min(), t.max()]
-        dt_out = 0.01  # fixed 100 Hz output, independent of input sampling rate
-        n_out = max(2, int(round((t_span[1] - t_span[0]) / dt_out)) + 1)
-        t_eval = np.linspace(t_span[0], t_span[1], n_out)
-
-        # sol = solve_ivp(rhs, t_span, data[state_columns].iloc[0].values, t_eval=t_eval, method='RK45')
-
-        # profiler = cProfile.Profile()
-        # profiler.enable()
-        
-        print("Starting integration...")
-        sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='Radau')
-        print("Integration completed.")
-
-        # profiler.disable()
-        # stats = pstats.Stats(profiler).sort_stats('cumtime')
-        # stats.print_stats(10)  # Print top 10 functions by cumulative time
-
-        if not sol.success:
-            print("Integration failed:", sol.message)
-
-
-        # print(F"psi: {sol.y[2, -20:]}\n u: {sol.y[3, -20:]}\n v: {sol.y[4, -20:]}\n r: {sol.y[5, -20:]}\n")
-        # zero-order-hold resample of the inputs onto the output grid,
-        # same rule the rhs applies during integration
-        input_idx = np.clip(np.searchsorted(t_input, t_eval, side="right") - 1, 0, None)
-
-        df_sim = pd.DataFrame(sol.y.T, columns=state_columns, index=t_eval)
-        df_input = pd.DataFrame(input_data[input_idx], columns=input_columns, index=t_eval)
-
-        forces_list = []
-        for k, t_i in enumerate(t_eval):
-            idx = input_idx[k]
-            x0_k = sol.y[:, k]
-            inp_k = input_data[idx]
-            beta_eff, beta_eff_sign = self.eff_drift_angle(x0_k, eps)
-            kr_X, kr_Y, kr_N, cns = self.krylov_force(x0_k, sd, beta_eff, beta_eff_sign, eps)
-            pod_X, pod_Y, pod_N = self.calc_pod_forces(
-                input=inp_k, input_columns=input_columns, sd=sd, urx=x0_k[3]
-            )
-            forces_list.append((kr_X, kr_Y, kr_N, pod_X, pod_Y, pod_N,
-                                 kr_X + pod_X, kr_Y + pod_Y, kr_N + pod_N, 
-                                 cns))
-
-        df_forces = pd.DataFrame(forces_list,
-                                 columns=["kr_X", "kr_Y", "kr_N",
-                                          "pod_X", "pod_Y", "pod_N",
-                                          "F_X", "F_Y", "M_N", "cns"],
-                                 index=t_eval)
-
-        return pd.concat([df_sim, df_input, df_forces], axis=1)
-
-
-    @timer
-    def simulate_abkowitz(self, x0_, coeff_path: str):
-        '''
-        Simulation mit einem Abkowitz-Polynommodell statt der Krylov-Kraefte.
-        coeff_path: YAML mit den Prime-Koeffizienten (siehe abkowitz.py)
-        '''
-        print("Initializing simulation with Abkowitz model...")
-        with open(coeff_path) as f:
-            coeffs = yaml.safe_load(f)
-
-        t_input = self.data.index.to_numpy()
-        input_data = self.data[self.input_columns].to_numpy()
-
-        rhs, forces_dim = make_abkowitz_rhs(
-            coeffs=coeffs,
-            sd=self.sd,
-            izz=self.hydro_mass_dict["izz"],
-            input_data=input_data,
-            t_input=t_input,
-            eps=self.eps,
-        )
-
-        t_span = [t_input.min(), t_input.max()]
-        dt_out = 0.01  # fixed 100 Hz output, same as simulate()
-        n_out = max(2, int(round((t_span[1] - t_span[0]) / dt_out)) + 1)
-        t_eval = np.linspace(t_span[0], t_span[1], n_out)
-
-        print("Starting integration...")
-        sol = solve_ivp(rhs, t_span, x0_, t_eval=t_eval, method='Radau')
-        print("Integration completed.")
-        if not sol.success:
-            print("Integration failed:", sol.message)
-
-        input_idx = np.clip(np.searchsorted(t_input, t_eval, side="right") - 1, 0, None)
-        df_sim = pd.DataFrame(sol.y.T, columns=self.state_columns, index=t_eval)
-        df_input = pd.DataFrame(input_data[input_idx], columns=self.input_columns, index=t_eval)
-
-        forces_list = [forces_dim(t_i, sol.y[:, k]) for k, t_i in enumerate(t_eval)]
-        df_forces = pd.DataFrame(forces_list, columns=["F_X", "F_Y", "M_N"], index=t_eval)
-
-        return pd.concat([df_sim, df_input, df_forces], axis=1)
-
-
-    def _make_rhs_with_input(self, N: float, delta_r: float):
-        """Build an rhs(t, y) closure for a fixed propeller RPM and rudder angle."""
-        rhs_sym = self.equations()
-        rhs_input = self.state_columns + ["F_X", "F_Y", "M_N"]
-        rhs_func = sp.lambdify(rhs_input, rhs_sym, modules="numpy")
-        n_y = len(self.state_columns) + 3
-        y_ = np.empty(n_y)
-        input_arr = np.array([N, N, delta_r, delta_r], dtype=float)
-        sd = self.sd
-        eps = self.eps
-        input_columns = self.input_columns
-        state_columns = self.state_columns
-
-        def rhs(t, y):
-            forces, cns = self.forces(x0_=y, input=input_arr,
-                                 input_columns=input_columns, sd=sd, eps=eps)
-            y_[:len(state_columns)] = y
-            y_[len(state_columns):] = forces
-            return np.asanyarray(rhs_func(*y_)).ravel()
-
-        return rhs
-
-    @timer
-    def simulate_zigzag(self, x0_: list, config: ZigzagConfig) -> pd.DataFrame:
-        """IMO zigzag manoeuvre simulation.
-
-        Phases:
-          1. ACCEL  – rudder=0, N=config.N for config.t0 seconds
-          2. MANEUVER – alternating ±delta_r until heading threshold ±psi_des is
-                        reached; repeated config.n_switches times
-          3. COAST  – rudder=0, N=0 for config.t_aft seconds
-        """
-        psi_des_rad = math.radians(config.psi_des)
-        delta_rad   = math.radians(config.delta_deg)
-        state_columns  = self.state_columns
-        input_columns  = self.input_columns
-        sd             = self.sd
-
-        # Each entry: (sol, N_seg, delta_seg, phase_label)
-        segments = []
-
-        t_now = 0.0
-        y_now = np.array(x0_, dtype=float)
-
-        def _integrate(rhs, t_start, duration, y0, event=None):
-            t_end  = t_start + duration
-            t_eval = np.arange(t_start, t_end + config.dt, config.dt)
-            t_eval = np.clip(t_eval, t_start, t_end)
-            evs = [event] if event is not None else []
-            return solve_ivp(rhs, [t_start, t_end], y0,
-                             t_eval=t_eval, events=evs, method='Radau')
-
-        # --- Phase 1: ACCEL ---
-        print(f"Zigzag: acceleration phase (t0={config.t0}s, N={config.N} RPM)...")
-        rhs = self._make_rhs_with_input(config.N, 0.0)
-        sol = _integrate(rhs, t_now, config.t0, y_now)
-        segments.append((sol, config.N, 0.0, 'accel'))
-        t_now = sol.t[-1]
-        y_now = sol.y[:, -1]
-
-        # --- Phase 2: MANEUVER ---
-        print(f"Zigzag: manoeuvre phase ({config.n_switches} switches, "
-              f"delta={config.delta_deg}°, psi_des={config.psi_des}°)...")
-        sign = 1
-        for i in range(config.n_switches):
-            rudder  = sign * delta_rad
-            rhs     = self._make_rhs_with_input(config.N, rudder)
-            psi_ref = float(y_now[2])
-
-            def heading_event(t, y, s=sign, ref=psi_ref, des=psi_des_rad):
-                return s * (y[2] - ref) - des
-            heading_event.terminal  = True
-            heading_event.direction = 1   # fires only when value crosses 0 upward
-
-            sol = _integrate(rhs, t_now, 600.0, y_now, event=heading_event)
-            segments.append((sol, config.N, rudder, 'maneuver'))
-            t_now = sol.t[-1]
-            y_now = sol.y[:, -1]
-            print(f"  switch {i+1}/{config.n_switches}: "
-                  f"t={t_now:.1f}s  psi={math.degrees(float(y_now[2])):.1f}°  "
-                  f"next rudder={'port' if sign < 0 else 'stbd'}")
-            sign *= -1
-
-        # --- Phase 3: COAST ---
-        print(f"Zigzag: coast phase (t_aft={config.t_aft}s)...")
-        rhs = self._make_rhs_with_input(0.0, 0.0)
-        sol = _integrate(rhs, t_now, config.t_aft, y_now)
-        segments.append((sol, 0.0, 0.0, 'coast'))
-
-        # --- Combine segments (drop duplicate boundary point between segments) ---
-        parts_t, parts_y, parts_inp, parts_phase = [], [], [], []
-        for k, (s, N_seg, delta_seg, phase) in enumerate(segments):
-            sl = slice(1, None) if k > 0 else slice(None)
-            parts_t.append(s.t[sl])
-            parts_y.append(s.y[:, sl])
-            n = s.t[sl].shape[0]
-            parts_inp.append(
-                np.tile([N_seg, N_seg, delta_seg, delta_seg], (n, 1))
-            )
-            parts_phase.extend([phase] * n)
-
-        t_all   = np.concatenate(parts_t)
-        y_all   = np.hstack(parts_y)
-        inp_all = np.vstack(parts_inp)
-
-        df_sim   = pd.DataFrame(y_all.T,  columns=state_columns,  index=t_all)
-        df_input = pd.DataFrame(inp_all,  columns=input_columns,  index=t_all)
-        df_phase = pd.DataFrame({'phase': parts_phase},            index=t_all)
-
-        # Recompute forces at every output point (same approach as simulate)
-        forces_list = []
-        for k in range(len(t_all)):
-            x0_k = y_all[:, k]
-            inp_k = inp_all[k]
-            beta_eff, beta_eff_sign = self.eff_drift_angle(x0_k, self.eps)
-            kr_X, kr_Y, kr_N = self.krylov_force(x0_k, sd, beta_eff, beta_eff_sign, self.eps)
-            pod_X, pod_Y, pod_N = self.calc_pod_forces(
-                input=inp_k, input_columns=input_columns, sd=sd, urx=x0_k[3]
-            )
-            forces_list.append((kr_X, kr_Y, kr_N, pod_X, pod_Y, pod_N,
-                                 kr_X + pod_X, kr_Y + pod_Y, kr_N + pod_N))
-
-        df_forces = pd.DataFrame(forces_list,
-                                 columns=["kr_X", "kr_Y", "kr_N",
-                                          "pod_X", "pod_Y", "pod_N",
-                                          "F_X", "F_Y", "M_N"],
-                                 index=t_all)
-
-        print("Zigzag simulation completed.")
-        return pd.concat([df_sim, df_input, df_forces, df_phase], axis=1)
-
     def equations(self, name: str= "krylov"):
         # movement equations for the forces, to be simplified and lambdified with sympy
 
@@ -610,21 +334,6 @@ class Krylov_forces(Krylov_pre_calc):
 
         return rhs_sym
     
-    def make_rhs(self, rhs_func, input, input_id, input_columns, state_columns, y_array, sd, eps):
-
-        def rhs(t, y):
-            x0_ = y
-            
-            # self.data.iloc[t][self.state_columns].values()
-            # Zero-Order-Hold -> 
-            i = np.searchsorted(input_id, t, side="right") - 1 # finde the corresponding index from input data. -1 take last step not next step
-            X, Y, N, cns = self.forces(x0_ = x0_, input = input[i], input_columns = input_columns, sd = sd, eps = eps)
-            y_array[:len(state_columns)] = x0_
-            y_array[len(state_columns):] = [X, Y, N]
-
-            return np.asanyarray(rhs_func(*y_array)).ravel()
-        return rhs
-
     def forces(self,
                 x0_ = None,
                 input: pd.DataFrame = None,
@@ -658,6 +367,14 @@ class Krylov_forces(Krylov_pre_calc):
                         # N =[input.loc[:, input_columns].values[0]],  # pod forces need to be time dependent, here only the first value is taken for testing
                         urx = x0_[3]
                     )
+        wind_X, wind_Y, wind_N = self.calc_windforces(
+                        uwind = self.uwind,
+                        wind_dir = self.wind_dir,
+                        rho_air = self.rho_air,
+                        Ax = sd.A_x, Ay = sd.A_y, L = sd.L,
+                        x0_ = x0_,
+                        cxw = sd.C_x_w, cyw = sd.C_y_w, cnw = sd.C_n_w,
+                    )
         # print(f"Krylov forces: X_kr={kr_X:.2f} N, Y_kr={kr_Y:.2f} N, N_kr={kr_N:.2f} Nm")
         # print(f"Pod forces: X_pod={pox_X:.2f} N, Y_pod={pod_Y:.2f} N, N_pod={pod_N:.2f} Nm")
 
@@ -667,8 +384,11 @@ class Krylov_forces(Krylov_pre_calc):
 
         # print(f"Total forces: X= kr:{kr_X} + {pox_X:.2f} N, Y= kr:{kr_Y } + { pod_Y:.2f} N, N= kr:{kr_N } + { pod_N:.2f} Nm")
         # print(f"urx: {x0_[3]}")
-        
-        return kr_X + pod_X, kr_Y +pod_Y, kr_N +pod_N, cns
+
+        return (kr_X + pod_X + wind_X,
+                kr_Y + pod_Y + wind_Y,
+                kr_N + pod_N + wind_N,
+                cns)
 
     
     #------------------------------------------------------
@@ -850,9 +570,9 @@ class Krylov_forces(Krylov_pre_calc):
         print(f"cy_beta_2: {cy_beta_2}")
         cy_beta = 0.5* cy_beta_2 * np.sin(2.* beta_eff)* np.cos(beta_eff) + (c2*(np.sin(beta_eff)**2)+ c3*(np.sin(2*beta_eff)**4))* beta_eff_sign
         
-        term1 = cy_beta_2 * np.sin(2*beta_eff) * np.cos(beta_eff)
-        term2_mag = c2 * np.sin(beta_eff)**2 + c3 * np.sin(2*beta_eff)**4
-        term2 = term2_mag * beta_eff_sign
+        # term1 = cy_beta_2 * np.sin(2*beta_eff) * np.cos(beta_eff)
+        # term2_mag = c2 * np.sin(beta_eff)**2 + c3 * np.sin(2*beta_eff)**4
+        # term2 = term2_mag * beta_eff_sign
 
 #         print(
 #             f"beta_eff={beta_eff}, "
@@ -1464,16 +1184,21 @@ class Krylov_forces(Krylov_pre_calc):
             print(f"  pod total: X={X_pod:.1f} N, Y={Y_pod:.1f} N, N={N_pod:.1f} Nm, urx={urx:.2f} m/s")
         return [X_pod, Y_pod, N_pod]
 
+    # def calc_windforces(self, uwind, wind_dir, rho_air, Ax, Ay, L, x0_, cxw = 0, cyw = 0, cnw = 0):
     def calc_windforces(self, uwind, wind_dir, rho_air, Ax, Ay, L, x0_, cxw = 0, cyw = 0, cnw = 0):
         # need to add boundary effekts for wind forces 
-               
+        
+        # boundary effects are neglectet, because the wind was directly measured on the ship 
+
         # relative windspeeds
         urx = - x0_[3] + uwind* math.cos(x0_[2]-wind_dir)
         ury = - x0_[4] + uwind* math.sin(x0_[2]-wind_dir)
 
         f_wind_x = cxw * 0.5 * rho_air * urx * abs(urx) * Ax
         f_wind_y = -cyw * 0.5 * rho_air * ury * abs(ury) * Ay
-        f_wind_n = cnw * 0.5 * rho_air * urx * abs(urx) * L
+        # und Giermoment kommt aus der Queranstroemung, nicht der Laengsanstroemung.
+        # Standardform: C_n * q * A_y * L
+        f_wind_n = cnw * 0.5 * rho_air * ury * abs(ury) * Ay * L
 
         return f_wind_x, f_wind_y, f_wind_n
 
@@ -1481,6 +1206,50 @@ class Krylov_forces(Krylov_pre_calc):
 # test written by copilot to check the rudder force calculation in isolation from the rest of the code.
 
 # RESULT: new code shows same results for all tested forces and moments. 
+class KrylovModel:
+    """Adapter: Krylov_forces als Modell fuer den Simulator (siehe SIMULATOR.md).
+
+    Lambdifiziert die Bewegungsgleichungen einmal; pro rhs-Auswertung werden
+    die Kraefte aus Krylov_forces.forces() eingesetzt.
+    """
+
+    force_columns = ["kr_X", "kr_Y", "kr_N", "pod_X", "pod_Y", "pod_N",
+                     "wind_X", "wind_Y", "wind_N",
+                     "F_X", "F_Y", "M_N", "cns"]
+
+    def __init__(self, kf: Krylov_forces):
+        self.kf = kf
+        rhs_sym = kf.equations()
+        rhs_input = kf.state_columns + ["F_X", "F_Y", "M_N"]
+        self._rhs_func = sp.lambdify(rhs_input, rhs_sym, modules="numpy")
+        self._y = np.empty(len(kf.state_columns) + 3)
+
+    def derivatives(self, t, y, inp):
+        kf = self.kf
+        # Windkraefte stecken bereits in kf.forces() (gemittelter Trial-Wind)
+        X, Y, N, cns = kf.forces(x0_=y, input=inp, input_columns=kf.input_columns,
+                                 sd=kf.sd, eps=kf.eps)
+        self._y[:len(kf.state_columns)] = y
+        self._y[len(kf.state_columns):] = [X, Y, N]
+        return np.asanyarray(self._rhs_func(*self._y)).ravel()
+
+    def forces(self, t, y, inp):
+        kf = self.kf
+        beta_eff, beta_eff_sign = kf.eff_drift_angle(y, kf.eps)
+        kr_X, kr_Y, kr_N, cns = kf.krylov_force(y, kf.sd, beta_eff, beta_eff_sign, kf.eps)
+        pod_X, pod_Y, pod_N = kf.calc_pod_forces(input=inp, input_columns=kf.input_columns,
+                                                 sd=kf.sd, urx=y[3])
+        wind_X, wind_Y, wind_N = kf.calc_windforces(
+            uwind=kf.uwind, wind_dir=kf.wind_dir, rho_air=kf.rho_air,
+            Ax=kf.sd.A_x, Ay=kf.sd.A_y, L=kf.sd.L, x0_=y,
+            cxw=kf.sd.C_x_w, cyw=kf.sd.C_y_w, cnw=kf.sd.C_n_w)
+
+        return (kr_X, kr_Y, kr_N, pod_X, pod_Y, pod_N,
+                wind_X, wind_Y, wind_N,
+                kr_X + pod_X + wind_X, kr_Y + pod_Y + wind_Y,
+                kr_N + pod_N + wind_N, cns)
+
+
 def calc_rudder_forces_direct(sp: dict, Thr, deltas, lop):
     """Standalone test implementation of pod/pod-thruster forces.
 
@@ -1605,10 +1374,16 @@ if __name__ == "__main__":
     # kf.xtg = -0.03
     x0_ = [0,0,0,3.6,0,0]
 
-    # x, y, n = kf.forces(x0 = x0_, eps = kf.eps, input = input_data[["N0", "N1", "delta_r0", "delta_r1"]], input_columns = ["N0", "N1", "delta_r0", "delta_r1"], sd = kf.sd)
-    # a, b, c , d, e, f =kf.equations()
-    # print(f"{a}\n{b}\n{c}\n{d}\n{e}\n{f}")
-    df = kf.simulate(x0_)
+    from Krylov.simulator import Simulator
+    from Krylov.abkowitz import AbkowitzModel
+
+    sim = Simulator(data=input_data)
+    sim.add_model("krylov", KrylovModel(kf))
+    sim.add_model("abkowitz", AbkowitzModel.from_yaml(
+        "data/03_primary/wlfa/abkowitz_coefficients.yml", kf.sd, kf.eps))
+
+    df = sim.simulate("krylov", x0_)
+    # df = sim.simulate("abkowitz", x0_)
 
     df.reset_index(inplace=True)
     df_plot = TelemetryPlotter(df, t_unit="s", timecolumn="index", relative_time=True, sensor=False)
