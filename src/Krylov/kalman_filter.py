@@ -118,7 +118,7 @@ class ExtendedKalmanFilter:
         P = (np.eye(len(x)) - K @ self.H) @ P_pred @ (np.eye(len(x)) - K @ self.H).T + K @ self.R @ K.T
         return x, P, y
     
-    def filter(self, x0: np.ndarray = None, dt: float = 1.0):
+    def filter(self, x0: np.ndarray = None, dt: float = 0.1):
         inp = self.u_inp
         meas = self.meas
         start_time = self.data.index[0]

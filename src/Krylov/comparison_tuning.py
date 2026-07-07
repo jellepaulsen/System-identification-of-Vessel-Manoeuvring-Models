@@ -1,14 +1,18 @@
-"""Vergleich von Krylov-Simulationen mit Messdaten und Parameter-Tuning.
+"""Vergleich von Simulationen (Krylov, Abkowitz, ...) mit Messdaten und Parameter-Tuning.
 
 Typischer Ablauf (Notebook):
 
     from Krylov.comparison_tuning import KrylovComparison, ParameterTuner
 
     comp = KrylovComparison(kf, data)      # kf: Krylov_forces, data: Trial-Parquet (Index in ns)
-    comp.prepare_inputs()                  # rpm/azimuth -> kf.data (N0, N1, delta_r0, delta_r1)
-    comp.run()                             # Simulation mit x0 aus der Messung
+    comp.prepare_inputs()                  # rpm/azimuth -> comp.simulator.data (N0, N1, ...)
+    comp.run()                             # Krylov-Simulation mit x0 aus der Messung
     print(comp.error_factors())            # Fehler als Faktor sim/real pro Kanal
     comp.plot_timeseries(); comp.plot_track()
+
+    # weiteres Modell gegen dieselbe Messung vergleichen:
+    comp.simulator.add_model("abkowitz", AbkowitzModel.from_yaml(path, kf.sd, kf.eps))
+    comp.run(model="abkowitz")
 
     tuner = ParameterTuner(comp)
     print(tuner.tune())                    # iteriert k_x/k_n (und k_y aus der Querbilanz)
@@ -20,6 +24,9 @@ import numpy as np
 import pandas as pd
 from scipy.signal import medfilt
 from scipy.optimize import brentq
+
+from Krylov.krylov import KrylovModel
+from Krylov.simulator import Simulator
 
 
 class KrylovComparison:
@@ -52,6 +59,8 @@ class KrylovComparison:
         self.subtract_azimuth_offset = subtract_azimuth_offset
         if use_rudder_force:
             kf.calc_pod_forces = kf.calc_pod_rud_force
+        self.simulator = Simulator()
+        self.simulator.add_model("krylov", KrylovModel(kf))
         self.sim = None
         self._prepare_measurement()
 
@@ -118,7 +127,7 @@ class KrylovComparison:
     # Simulation
     # ------------------------------------------------------------------
     def prepare_inputs(self, medfilt_kernel: int = 15):
-        """Baut kf.data (N0, N1, delta_r0, delta_r1; Index in s) aus den Messkanaelen."""
+        """Baut simulator.data (N0, N1, delta_r0, delta_r1; Index in s) aus den Messkanaelen."""
         raw = self.raw
         t = raw.index.to_numpy(dtype=float) / 1e9
         t = t - t[0]
@@ -131,18 +140,18 @@ class KrylovComparison:
                     off = raw[off_col].to_numpy(dtype=float)
                     x = x - np.where(np.isfinite(off), off, 0.0)  # Offset-Kanal kann NaN sein
             inp[sim_col] = medfilt(x, medfilt_kernel)
-        self.kf.data = pd.DataFrame(inp, index=t)
-        return self.kf.data
+        self.simulator.data = pd.DataFrame(inp, index=t)
+        return self.simulator.data
 
     def x0_from_measurement(self):
         m = self.meas
         return [0.0, 0.0, float(m["psi"].iloc[0]),
                 float(m["u"].iloc[0]), float(m["v"].iloc[0]), float(m["r"].iloc[0])]
 
-    def run(self, x0=None):
+    def run(self, x0=None, model: str = "krylov"):
         if x0 is None:
             x0 = self.x0_from_measurement()
-        sim = self.kf.simulate(x0)
+        sim = self.simulator.simulate(model, x0)
         # auf das Vergleichsraster interpolieren
         ts = sim.index.to_numpy()
         s = pd.DataFrame(index=self.t)
@@ -268,9 +277,9 @@ class ParameterTuner:
         r = float(np.polyfit(comp.t[s], m["psi"].to_numpy()[s], 1)[0])
         U = float(np.mean(m["sog"].to_numpy()[s]))
         d = float(np.mean(m["delta"].to_numpy()[s]))
-        t_inp = kf.data.index.to_numpy(dtype=float)
-        n = float(np.mean(0.5 * (np.interp(comp.t, t_inp, kf.data["N0"])
-                                 + np.interp(comp.t, t_inp, kf.data["N1"]))[s]))
+        t_inp = comp.simulator.data.index.to_numpy(dtype=float)
+        n = float(np.mean(0.5 * (np.interp(comp.t, t_inp, comp.simulator.data["N0"])
+                                 + np.interp(comp.t, t_inp, comp.simulator.data["N1"]))[s]))
         m_x = kf.hydro_mass_dict["m11"] + kf.sd.m
         m_y = kf.hydro_mass_dict["m22"] + kf.sd.m
         k_x_saved, k_y_saved, k_n_saved = kf.k_x, kf.k_y, kf.k_n
