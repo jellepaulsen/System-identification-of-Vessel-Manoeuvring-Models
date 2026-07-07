@@ -246,9 +246,10 @@ class Krylov_forces(Krylov_pre_calc):
         """
         row = self.data.iloc[0]
 
-        psi = math.radians(row[heading_col])
+        # Einheiten im wlfa-Datensatz: heading/COG bereits in rad, rate_of_turn in deg/s
+        psi = row[heading_col]
         sog = row[sog_col]
-        cog = math.radians(row[cog_col])
+        cog = row[cog_col]
         r   = math.radians(row[rot_col])
 
         # earth-frame velocity components (NED)
@@ -567,7 +568,6 @@ class Krylov_forces(Krylov_pre_calc):
 
         # cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 0.5)
         cy_beta_2 = np.clip(a3 * Q + b3, 0.0, 1)
-        print(f"cy_beta_2: {cy_beta_2}")
         cy_beta = 0.5* cy_beta_2 * np.sin(2.* beta_eff)* np.cos(beta_eff) + (c2*(np.sin(beta_eff)**2)+ c3*(np.sin(2*beta_eff)**4))* beta_eff_sign
         
         # term1 = cy_beta_2 * np.sin(2*beta_eff) * np.cos(beta_eff)
