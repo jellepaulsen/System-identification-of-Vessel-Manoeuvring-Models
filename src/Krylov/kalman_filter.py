@@ -1,7 +1,8 @@
-import numpy as np 
+import numpy as np
 import pandas as pd
 from sympy import symbols, Matrix, sin, cos, simplify
 from scipy.integrate import solve_ivp
+from scipy.signal import savgol_filter
 
 
 
@@ -118,7 +119,16 @@ class ExtendedKalmanFilter:
         P = (np.eye(len(x)) - K @ self.H) @ P_pred @ (np.eye(len(x)) - K @ self.H).T + K @ self.R @ K.T
         return x, P, y
     
-    def filter(self, x0: np.ndarray = None, dt: float = 0.1):
+    def filter(self, x0: np.ndarray = None, dt: float = 0.1,
+              accel_columns: tuple = ("u", "v", "r"),
+              savgol_window: int = 11, savgol_polyorder: int = 3):
+        """Filtert die Messreihe und haengt zusaetzlich udot/vdot/rdot an.
+
+        Die Beschleunigungen werden fuer ForceRegression (regression.py,
+        siehe REGRESSION.md) gebraucht: u,v,r vor dem Differenzieren mit
+        Savitzky-Golay glaetten (sonst verstaerkt np.gradient das Rauschen
+        im EKF-Output), dann zentrale Differenzen mit np.gradient(., dt).
+        """
         inp = self.u_inp
         meas = self.meas
         start_time = self.data.index[0]
@@ -148,7 +158,18 @@ class ExtendedKalmanFilter:
             record.update({f"y_{name}": val for name, val in zip(self.meas_coulumns, y)})
             records.append(record)
 
-        return pd.DataFrame(records).set_index("t")
+        df = pd.DataFrame(records).set_index("t")
+
+        # ungerades Fenster, nicht groesser als die Datenreihe
+        window = min(savgol_window, len(df) if len(df) % 2 else len(df) - 1)
+        smooth = window >= 3 and window > savgol_polyorder
+        for name in accel_columns:
+            series = df[name].to_numpy()
+            if smooth:
+                series = savgol_filter(series, window, savgol_polyorder)
+            df[f"{name}dot"] = np.gradient(series, dt)
+
+        return df
 
 
 if __name__ == "__main__":

@@ -64,6 +64,32 @@ def split_mass_entries(coeffs: dict):
     return ignored, coeffs
 
 
+def rigid_body_lhs(m_prime, mxg_prime, iz_prime, u, v, r, udot, vdot, rdot):
+    """Starrkoerper-Seite (Traegheit + xg-Kopplung) der Bewegungsgleichung im
+    Prime-System - unabhaengig von den Rumpf-Koeffizienten.
+
+    Wird zweimal gebraucht: einmal um nach den Beschleunigungen aufzuloesen
+    (build_abkowitz_equations), einmal umgekehrt um aus einer gemessenen
+    Bewegung die dafuer noetige Kraft zu berechnen (AbkowitzModel.rigid_body_forces,
+    fuer die Regression in regression.py). Beide Male dieselbe Formel -
+    keine zweite Quelle fuer die Physik.
+    """
+    return sp.Matrix([
+        m_prime * (udot - v * r) - mxg_prime * r**2,
+        m_prime * (vdot + u * r) + mxg_prime * rdot,
+        iz_prime * rdot + mxg_prime * (vdot + u * r),
+    ])
+
+
+def q_scale(sd, U):
+    """Normierung der Kraefte im D-basierten Prime-System: 0.5*rho*L*D*U^2
+    (Moment zusaetzlich *L). Gemeinsam genutzt von AbkowitzModel und
+    regression.py, damit Simulation und Regression dieselbe Entdimensionierung
+    verwenden.
+    """
+    return 0.5 * sd.rho * sd.L * sd.Tm * U**2
+
+
 def build_abkowitz_equations(coeffs: dict, m_prime: float, mxg_prime: float,
                              iz_prime: float):
     """Baut die Bewegungsgleichungen im Prime-System auf und loest sie
@@ -78,6 +104,8 @@ def build_abkowitz_equations(coeffs: dict, m_prime: float, mxg_prime: float,
         forces:    sp.Matrix([X', Y', N']) nur Rumpf-Kraftterme (ohne acc/ext)
         var_syms:  Liste der sympy-Symbole in der Reihenfolge von VARIABLES
         ext_syms:  [X_ext, Y_ext, N_ext]
+        lhs:       sp.Matrix der Starrkoerper-Seite (rigid_body_lhs), fuer die
+                   inverse Kraftberechnung (AbkowitzModel.rigid_body_forces)
     """
     var_syms = {name: sp.Symbol(name) for name in VARIABLES}
     acc_syms = {name: sp.Symbol(name) for name in ACC_NAMES}
@@ -124,13 +152,11 @@ def build_abkowitz_equations(coeffs: dict, m_prime: float, mxg_prime: float,
     ext_syms = [sp.Symbol("X_ext"), sp.Symbol("Y_ext"), sp.Symbol("N_ext")]
 
     # Bewegungsgleichungen im Prime-System inkl. xg-Kopplung
+    lhs = rigid_body_lhs(m_prime, mxg_prime, iz_prime, u, v, r, udot, vdot, rdot)
     eqs = [
-        sp.Eq(m_prime * (udot - v * r) - mxg_prime * r**2,
-              force["X"] + acc_terms["X"] + ext_syms[0]),
-        sp.Eq(m_prime * (vdot + u * r) + mxg_prime * rdot,
-              force["Y"] + acc_terms["Y"] + ext_syms[1]),
-        sp.Eq(iz_prime * rdot + mxg_prime * (vdot + u * r),
-              force["N"] + acc_terms["N"] + ext_syms[2]),
+        sp.Eq(lhs[0], force["X"] + acc_terms["X"] + ext_syms[0]),
+        sp.Eq(lhs[1], force["Y"] + acc_terms["Y"] + ext_syms[1]),
+        sp.Eq(lhs[2], force["N"] + acc_terms["N"] + ext_syms[2]),
     ]
     sol = sp.solve(eqs, [udot, vdot, rdot], dict=True)
     if not sol:
@@ -139,7 +165,7 @@ def build_abkowitz_equations(coeffs: dict, m_prime: float, mxg_prime: float,
 
     accs = sp.Matrix([sol[udot], sol[vdot], sol[rdot]])
     forces = sp.Matrix([force["X"], force["Y"], force["N"]])
-    return accs, forces, list(var_syms.values()), ext_syms
+    return accs, forces, list(var_syms.values()), ext_syms, lhs
 
 
 def pod_forces_from_krylov(kf):
@@ -180,11 +206,19 @@ class AbkowitzModel:
         if ignored:
             print(f"AbkowitzModel: YAML-Eintraege {ignored} werden ignoriert "
                   f"(Massen kommen aus den Schiffsdaten)")
-        accs_sym, forces_sym, var_syms, ext_syms = build_abkowitz_equations(
+        accs_sym, forces_sym, var_syms, ext_syms, lhs_sym = build_abkowitz_equations(
             coeffs, m_prime, mxg_prime, iz_prime)
         self._acc_func = sp.lambdify(var_syms + ext_syms, accs_sym, modules="numpy")
         self._force_func = sp.lambdify(var_syms, forces_sym, modules="numpy")
         self._prime_funcs = list(VARIABLES.values())
+
+        # Fuer die inverse Kraftberechnung (rigid_body_forces, siehe REGRESSION.md):
+        # dieselbe Starrkoerper-Seite wie oben, aber als Funktion von u',v',r'
+        # und den (gemessenen) primed Beschleunigungen udot',vdot',rdot'.
+        u_sym, v_sym, r_sym = var_syms[0], var_syms[1], var_syms[2]
+        udot_sym, vdot_sym, rdot_sym = (sp.Symbol(n) for n in ACC_NAMES)
+        self._rigid_body_func = sp.lambdify(
+            (u_sym, v_sym, r_sym, udot_sym, vdot_sym, rdot_sym), lhs_sym, modules="numpy")
 
     @classmethod
     def from_yaml(cls, path: str, sd, eps: float, pod_forces=None):
@@ -196,8 +230,27 @@ class AbkowitzModel:
         return [f(y, inp, U, self.sd) for f in self._prime_funcs], U
 
     def _q(self, U):
-        # Normierung der Kraefte: 0.5*rho*L*D*U^2 (Moment zusaetzlich *L)
-        return 0.5 * self.sd.rho * self.sd.L * self.sd.Tm * U**2
+        return q_scale(self.sd, U)
+
+    def rigid_body_forces(self, y, acc):
+        """Kraft/Moment [N, N, Nm], die die gegebene Bewegung erfordert -
+        reine Starrkoerperseite der Bewegungsgleichung (Traegheit + xg-
+        Kopplung aus den Schiffsdaten), ohne jede hydrodynamische Kraft.
+
+        y:   Zustand [x0, y0, psi, u, v, r] (SI, dimensional)
+        acc: [udot, vdot, rdot] (SI, dimensional) - z.B. aus
+             ExtendedKalmanFilter.filter() (gefilterte + differenzierte Messung)
+
+        Fuer ForceRegression (siehe REGRESSION.md): X,Y,N hier abgezogen von
+        der gemessenen Gesamtkraft ergibt die zu regressierende Hydrodynamik.
+        """
+        U = max(np.sqrt(y[3]**2 + y[4]**2), self.eps)
+        L = self.sd.L
+        u_p, v_p, r_p = y[3] / U, y[4] / U, y[5] * L / U
+        udot_p, vdot_p, rdot_p = acc[0] * L / U**2, acc[1] * L / U**2, acc[2] * L**2 / U**2
+        Xp, Yp, Np = np.asarray(self._rigid_body_func(u_p, v_p, r_p, udot_p, vdot_p, rdot_p)).ravel()
+        q = self._q(U)
+        return Xp * q, Yp * q, Np * q * L
 
     def _pod_prime(self, t, y, inp, U):
         """Pod-Kraefte dimensional -> prime (X', Y', N')."""
@@ -251,7 +304,7 @@ if __name__ == "__main__":
     ignored, rest = split_mass_entries(coeffs)
     m_prime, mxg_prime, iz_prime = mass_primes_from_ship(sd)
     print(f"m'={m_prime:.4f}, mxg'={mxg_prime:.5f}, Iz'={iz_prime:.5f}, ignoriert: {ignored}")
-    accs, forces, syms, ext_syms = build_abkowitz_equations(rest, m_prime, mxg_prime, iz_prime)
+    accs, forces, syms, ext_syms, lhs = build_abkowitz_equations(rest, m_prime, mxg_prime, iz_prime)
     print("Kraefte X', Y', N':")
     sp.pprint(forces)
     print("Beschleunigungen udot', vdot', rdot':")

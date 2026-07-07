@@ -334,7 +334,35 @@ class Krylov_forces(Krylov_pre_calc):
         })
 
         return rhs_sym
-    
+
+    def rigid_body_force_func(self, name: str = "krylov"):
+        """Loest equations() nach F_X, F_Y, M_N statt nach den Beschleunigungen.
+
+        Dieselbe EOM wie equations() - nur umgekehrt: aus einer gemessenen
+        Bewegung (u,v,r,udot,vdot,rdot) die dafuer noetige Kraft, statt aus
+        einer Kraft die Bewegung. Fuer ForceRegression (siehe REGRESSION.md).
+        Ergebnis wird pro Modellname zwischengespeichert (Lambdify ist teuer).
+        """
+        cache = getattr(self, "_rigid_body_funcs", None)
+        if cache is None:
+            cache = self._rigid_body_funcs = {}
+        if name in cache:
+            return cache[name]
+
+        F_X, F_Y, M_N = sp.symbols('F_X F_Y M_N')
+        u, v, r = sp.symbols('u v r')
+        udot, vdot, rdot = sp.symbols('udot vdot rdot')
+        rhs_sym = self.equations(name=name)
+        eqs = [sp.Eq(udot, rhs_sym[3]), sp.Eq(vdot, rhs_sym[4]), sp.Eq(rdot, rhs_sym[5])]
+        sol = sp.solve(eqs, [F_X, F_Y, M_N], dict=True)
+        if not sol:
+            raise ValueError(f"Kraft-Gleichungssystem fuer '{name}' nicht loesbar")
+        sol = sol[0]
+        func = sp.lambdify((u, v, r, udot, vdot, rdot),
+                           [sol[F_X], sol[F_Y], sol[M_N]], modules="numpy")
+        cache[name] = func
+        return func
+
     def forces(self,
                 x0_ = None,
                 input: pd.DataFrame = None,
@@ -1232,6 +1260,22 @@ class KrylovModel:
         self._y[:len(kf.state_columns)] = y
         self._y[len(kf.state_columns):] = [X, Y, N]
         return np.asanyarray(self._rhs_func(*self._y)).ravel()
+
+    def rigid_body_forces(self, y, acc, name: str = "krylov"):
+        """Kraft/Moment [N, N, Nm], die die gegebene Bewegung erfordert -
+        reine Starrkoerperseite der Krylov-EOM (Traegheit + hydrodynamische
+        Masse aus kf.hydro_mass_dict), ohne Rumpf-/Pod-/Windkraft.
+
+        y:   Zustand [x0, y0, psi, u, v, r] (SI, dimensional)
+        acc: [udot, vdot, rdot] (SI, dimensional), z.B. aus
+             ExtendedKalmanFilter.filter()
+
+        Fuer ForceRegression (siehe REGRESSION.md): X,Y,N hier abgezogen von
+        der gemessenen Gesamtkraft ergibt die zu regressierende Hydrodynamik.
+        """
+        func = self.kf.rigid_body_force_func(name=name)
+        X, Y, N = np.asarray(func(y[3], y[4], y[5], acc[0], acc[1], acc[2])).ravel()
+        return X, Y, N
 
     def forces(self, t, y, inp):
         kf = self.kf
