@@ -137,6 +137,20 @@ ihn). Die Terme werden mit den **gleichen** `VARIABLES`-Funktionen aus
 [abkowitz.py](abkowitz.py) ausgewertet wie im Simulator — eine neue Variable
 dort ergaenzen reicht fuer beide Seiten.
 
+**Modell-Protokoll: `known_forces`** (optional, Default `("pod", "wind")`):
+`fit` zieht von `X_total`/`Y_total`/`N_total` genau die Fremdkraefte ab, die
+im `known_forces`-Tupel des Modells stehen — der Rest bleibt im Residuum und
+wird gegen die `term_spec`-Terme gefittet. `AbkowitzModel` und `KrylovModel`
+setzen beide standardmaessig `("pod", "wind")` (bisheriges Verhalten,
+unveraendert: Pod- und Windkraft gelten als bekannt). Ein "volles"
+Abkowitz-Modell, das Pod-/Ruderkraefte selbst ueber die `delta`-Variable
+mitregressieren soll (statt sich auf `kf.calc_pod_forces` zu verlassen),
+setzt `known_forces=("wind",)` — z.B.
+`AbkowitzModel.from_yaml(..., known_forces=("wind",))` fuer `abkowitz_full`;
+dann bleibt nur die Windkraft abgezogen, die Pod-Kraft steckt weiter im
+Residuum. Fehlt das Attribut ganz (eigenes Modell ohne `known_forces`), gilt
+`DEFAULT_KNOWN_FORCES = ("pod", "wind")` aus `regression.py`.
+
 Pro Gleichung ein `statsmodels.OLS` im Prime-System (`q_scale`-Normierung,
 gleiche Konvention wie `AbkowitzModel`). Zeilen mit `U <= eps` werden
 ausgeschlossen (Division im Prime-System instabil bei ~Stillstand).

@@ -11,7 +11,7 @@ Krylov_forces-Instanz `kf`, die den Input und Pod-/Windkraefte liefert):
 
 Alle Trials werden danach aneinandergehaengt (Markov-Zustand: die Zeitordnung
 zwischen Trials ist fuer die Regression irrelevant) und mit einem
-statsmodels-OLS je Gleichung (X/Y/N) gegen ein Set von Termen regressiert.
+sklearn-Regressor je Gleichung (X/Y/N) gegen ein Set von Termen regressiert.
 Das Term-Format ist dasselbe wie in der Abkowitz-Koeffizienten-YAML
 (Name -> [wert, [variablen]]), der Wert wird durch die Regression ersetzt.
 """
@@ -20,10 +20,75 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 import yaml
+from sklearn.base import clone
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
 
 from Krylov.abkowitz import VARIABLES, q_scale
+
+# Presets fuer fit(method=...): Name -> sklearn-Schaetzer-Klasse.
+SKLEARN_REGRESSION_METHODS = {
+    "linear": LinearRegression,
+    "ridge": Ridge,
+    "lasso": Lasso,
+    "elasticnet": ElasticNet,
+}
+
+
+class _SklearnFitResult:
+    """Kapselt ein gefittetes sklearn-Modell mit dem von ForceRegression
+    benoetigten Interface (params/fittedvalues/resid/rsquared/summary), das
+    summaries()/plot_fit()/to_yaml() auswerten.
+    """
+
+    def __init__(self, estimator, design: pd.DataFrame, target: np.ndarray):
+        self.estimator = estimator
+        fitted = estimator.predict(design.to_numpy())
+        self.params = pd.Series(np.ravel(estimator.coef_), index=design.columns)
+        self.fittedvalues = pd.Series(fitted, index=design.index)
+        self.resid = pd.Series(np.asarray(target) - fitted, index=design.index)
+        ss_res = float(np.sum(self.resid.to_numpy() ** 2))
+        ss_tot = float(np.sum((np.asarray(target) - np.mean(target)) ** 2))
+        self.rsquared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+    def summary(self):
+        lines = [f"R^2 = {self.rsquared:.4f}  ({type(self.estimator).__name__})"]
+        lines += [f"  {name}: {value:.6g}" for name, value in self.params.items()]
+        return "\n".join(lines)
+
+
+def _fit_equation(target: np.ndarray, design: pd.DataFrame, method, method_kwargs: dict):
+    """Fittet eine Gleichung (X/Y/N) mit einem sklearn-Regressor.
+
+    method: einer der Namen aus SKLEARN_REGRESSION_METHODS ("linear", "ridge",
+            "lasso", "elasticnet"), oder eine beliebige eigene sklearn-
+            Schaetzerinstanz (muss fit/predict/coef_ besitzen, z.B.
+            Ridge(alpha=0.1) oder ein Pipeline-/Custom-Regressor).
+    method_kwargs: zusaetzliche Keyword-Argumente fuer den sklearn-Schaetzer,
+                   wenn method ein Preset-Name ist (z.B. alpha=0.5 fuer ridge).
+                   Wird ignoriert, wenn method bereits eine Instanz ist.
+    """
+    if isinstance(method, str):
+        if method not in SKLEARN_REGRESSION_METHODS:
+            raise ValueError(
+                f"Unbekannte Regressionsmethode {method!r}. Verfuegbar: "
+                f"{sorted(SKLEARN_REGRESSION_METHODS)}, oder eine "
+                f"sklearn-Schaetzerinstanz.")
+        estimator = SKLEARN_REGRESSION_METHODS[method](fit_intercept=False, **method_kwargs)
+    else:
+        # eigene sklearn-Instanz - klonen, damit X/Y/N nicht denselben
+        # (evtl. schon gefitteten) Schaetzer teilen
+        estimator = clone(method)
+
+    estimator.fit(design.to_numpy(), target)
+    return _SklearnFitResult(estimator, design, target)
+
+# Modell-Protokoll (siehe REGRESSION.md): ein Modell kann optional
+# `known_forces` setzen, um zu entscheiden, welche bekannten Fremdkraefte
+# (Pod, Wind) vor der Regression von der Gesamtkraft abgezogen werden.
+# Ohne dieses Attribut (z.B. bestehende AbkowitzModel-/KrylovModel-Nutzung)
+# gilt der bisherige Default: beide werden abgezogen.
+DEFAULT_KNOWN_FORCES = ("pod", "wind")
 
 
 def variable_values(df: pd.DataFrame, sd) -> dict:
@@ -139,13 +204,28 @@ class ForceRegression:
     # ------------------------------------------------------------------
     # Fit je Gleichung (X, Y, N) im Prime-System
     # ------------------------------------------------------------------
-    def fit(self, term_spec: dict) -> dict:
+    def fit(self, term_spec: dict, method="linear", **method_kwargs) -> dict:
         """Regressiert X'_hydro, Y'_hydro, N'_hydro auf die Terme aus term_spec.
 
         term_spec: gleiches Format wie die Abkowitz-Koeffizienten-YAML,
                    z.B. {"Xu": [None, ["u"]], "Xvv": [None, ["v", "v"]], ...}.
                    Der erste Buchstabe entscheidet die Gleichung, der Wert
                    wird ignoriert (die Regression bestimmt ihn).
+        method:    sklearn-Regressionsmethode, siehe _fit_equation. Default
+                   "linear" (LinearRegression ohne Intercept, entspricht einer
+                   gewoehnlichen kleinste-Quadrate-Regression). Alternativ
+                   "ridge"/"lasso"/"elasticnet" (siehe SKLEARN_REGRESSION_METHODS)
+                   oder eine eigene sklearn-Schaetzerinstanz (z.B. Ridge(alpha=0.1)).
+        method_kwargs: zusaetzliche Keyword-Argumente fuer den sklearn-
+                   Schaetzer, wenn method ein Preset-Name ist (z.B. alpha=0.5).
+
+        Welche bekannten Fremdkraefte (Pod, Wind) von X_total/Y_total/N_total
+        abgezogen werden, entscheidet das Modell selbst ueber sein optionales
+        `known_forces`-Attribut (Default `("pod", "wind")`, siehe
+        DEFAULT_KNOWN_FORCES/REGRESSION.md). Ein Modell wie ein "volles"
+        Abkowitz-Modell, das Pod-/Ruderkraefte selbst mitregressieren soll
+        (z.B. ueber die "delta"-Variable), setzt `known_forces = ("wind",)` -
+        dann bleibt die Pod-Kraft im Residuum und wird per term_spec gefittet.
 
         Returns: {"X": RegressionResultsWrapper, "Y": ..., "N": ...}
         """
@@ -159,21 +239,82 @@ class ForceRegression:
         q = q_scale(self.sd, U)
         mask = U > self.eps
 
+        # list of calculated forces that are considered known and subtracted from the total forces
+        known_forces = tuple(getattr(self.model, "known_forces", DEFAULT_KNOWN_FORCES))
+
         self.results = {}
+        self._eq_mask = {}
+        self._eq_target = {}
         for eq in ("X", "Y", "N"):
             terms = {name: spec for name, spec in term_spec.items() if name[0].upper() == eq}
             if not terms:
                 continue
             design = pd.DataFrame(
                 {name: term_column(values, spec[1]) for name, spec in terms.items()})
+            print(f"design_df: {design}")
             norm = q * self.sd.L if eq == "N" else q
-            target = df[f"{eq}_hydro"].to_numpy() / norm
-            self.results[eq] = sm.OLS(target[mask], design[mask]).fit()
+            hydro = df[f"{eq}_total"].to_numpy().copy()
+            if "pod" in known_forces:
+                hydro -= df[f"pod_{eq}"].to_numpy()
+            if "wind" in known_forces:
+                hydro -= df[f"wind_{eq}"].to_numpy()
+            target = hydro / norm
+            self.results[eq] = _fit_equation(target[mask], design[mask], method, method_kwargs)
+            self._eq_mask[eq] = mask
+            self._eq_target[eq] = target
+
         return self.results
 
     def summaries(self) -> dict:
         """Diagnostik je Gleichung (R^2, p-Werte, Konfidenzintervalle)."""
         return {eq: res.summary() for eq, res in self.results.items()}
+
+    # ------------------------------------------------------------------
+    # Diagnose-Plot: gemessene vs. gefittete Werte + Residuen je Gleichung
+    # ------------------------------------------------------------------
+    def plot_fit(self, eq: str, ax=None):
+        """Zeigt fuer eine Gleichung (X/Y/N), wie gut der Fit die Daten trifft.
+
+        Oben: gemessene und gefittete Werte je Datenpunkt (nach `run` eingefaerbt).
+        Unten: Residuen (gemessen - gefittet), Nulllinie = perfekter Fit.
+
+        eq: "X", "Y" oder "N" - muss vorher mit fit() geschaetzt worden sein.
+        ax: optionales Paar (ax_werte, ax_resid); sonst wird eine neue Figure erzeugt.
+        Returns: (ax_werte, ax_resid)
+        """
+        import matplotlib.pyplot as plt
+
+        if eq not in self.results:
+            raise RuntimeError(f"Gleichung {eq} wurde noch nicht gefittet (fit)")
+
+        res = self.results[eq]
+        mask = self._eq_mask[eq]
+        target = self._eq_target[eq][mask]
+        fitted = res.fittedvalues.to_numpy()
+        resid = res.resid.to_numpy()
+        run = self.dataset["run"].to_numpy()[mask]
+        pos = np.flatnonzero(mask)
+
+        if ax is None:
+            _, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+        else:
+            ax1, ax2 = ax
+
+        for name in pd.unique(run):
+            sel = run == name
+            ax1.plot(pos[sel], target[sel], ".", label=f"{name} (gemessen)")
+            ax1.plot(pos[sel], fitted[sel], "-", label=f"{name} (fit)")
+            ax2.plot(pos[sel], resid[sel], ".", label=name)
+
+        rmse = np.sqrt(np.mean(resid ** 2))
+        ax1.set_ylabel(f"{eq}'_hydro")
+        ax1.set_title(f"Gleichung {eq}: R^2={res.rsquared:.3f}, RMSE={rmse:.4f}")
+        ax1.legend(fontsize=8)
+        ax2.axhline(0, color="k", lw=0.8)
+        ax2.set_ylabel("Residuum")
+        ax2.set_xlabel("Sample-Index (Dataset-Position)")
+        ax2.legend(fontsize=8)
+        return ax1, ax2
 
     # ------------------------------------------------------------------
     # Export im abkowitz.py-YAML-Format
@@ -188,7 +329,7 @@ class ForceRegression:
                 coeffs[name] = [float(value), mult]
 
         if path is None:
-            ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+            ts = datetime.now().strftime("%Y%m%dT%H%M")
             path = f"abkowitz_coefficients_regressed_{ts}.yml"
 
         with open(path, "w") as f:
@@ -211,11 +352,17 @@ if __name__ == "__main__":
         kry_p = yaml.safe_load(f)
     with open("data/01_raw/wlfa/ship_data.yml") as f:
         ship_parameters = yaml.safe_load(f)
+
+    with open("data/05_model_input/wlfa/abkowitz_simple_martin.yml") as f:
+        regress_coeffs = yaml.safe_load(f)
+
+
     ship_resistance = pd.read_csv("data/01_raw/wlfa/resistance_curve_HM.csv")
     prop_openwater = pd.read_csv("data/01_raw/wlfa/freif.inp", sep=r"\s+",
                                  header=None, names=["J", "KT", "KQ"])
     data = pd.read_parquet(
-        "data/03_primary/wlfa/TC_20.0_nan_b_10.0_35.0_rpm_stb_turn.parquet")
+        "data/03_primary/wlfa/ZZ_10.0_10.0_b_190.0_35.0_rpm_ps_turn.parquet")
+    print(f"dat: {data.head()}")
 
     kf = Krylov_forces(ship_parameters=ship_parameters, krylov_parameters=kry_p,
                        ship_resistance=ship_resistance, prop_openwater=prop_openwater,
@@ -225,7 +372,6 @@ if __name__ == "__main__":
                             "azimuth_response_ps", "azimuth_response_stb"],
         geopos=["latitude", "longitude"])
     kf.data["delta_r1"] = kf.data["delta_r0"]
-    kf.data.index = kf.data.index / 1e9
 
     # --- EKF: Zustandsschaetzung aus GPS/Kompass (Transitionsmodell = Krylov) ---
     state_columns = ["x0", "y0", "psi", "u", "v", "r"]
@@ -244,35 +390,45 @@ if __name__ == "__main__":
     print(f"EKF: {len(result)} Zeitschritte, Beschleunigungen dabei: {accel_cols}")
 
     # --- Regression: Starrkoerperseite kommt aus dem AbkowitzModel ---
-    abk_model = AbkowitzModel.from_yaml(
-        "data/03_primary/wlfa/abkowitz_coefficients.yml", kf.sd, eps=0.5)
+    # rigid_body_forces haengt nur an den Schiffsmassen (mass_primes_from_ship),
+    # nicht an den Koeffizienten - die YAML hier muss nur eine gueltige (nicht
+    # leere) Koeffizientenmenge liefern, damit AbkowitzModel gebaut werden kann.
+    COEFF_YAML = "data/05_model_input/wlfa/abkowitz_coefficients_regressed_20260708T085656.yml"
 
-    reg = ForceRegression(model=abk_model, sd=kf.sd, t_settle=30.0)
-    reg.add_run(result, kf, name="TC_20.0_stb_turn")
-    reg.build_dataset()
-    print(f"Datensatz: {len(reg.dataset)} Zeilen nach Ausschluss der Einschwingphase")
+    # Vergleich alter vs. neuer Parametersatz (siehe REGRESSION.md - "known_forces"):
+    # "alt" haelt sich an den bestehenden Kraftfluss (Pod-Kraft aus
+    # kf.calc_pod_forces gilt als bekannt und wird abgezogen, nur Rumpf-Terme
+    # werden gefittet). "abkowitz_full" ist neu: nur die Windkraft gilt als
+    # bekannt, Pod-/Ruderkraft bleibt im Residuum und wird ueber die
+    # DELTA_TERMS mitregressiert.
+    configs = [
+        ("abkowitz", AbkowitzModel.from_yaml(COEFF_YAML, kf.sd, eps=0.1, known_forces=("wind","pod")),
+         regress_coeffs, "data/05_model_input/wlfa/regressed/abkowitz_coefficients_regressed_test.yml"),
+    ]
 
-    # Term-Set: Abkowitz-Kernterme + added mass (udot/vdot sind primed
-    # Beschleunigungen, siehe REGRESSION.md - "Added mass")
-    term_spec = {
-        "Xu":    [None, ["u"]],
-        "Xvv":   [None, ["v", "v"]],
-        "Xrr":   [None, ["r", "r"]],
-        "Xudot": [None, ["udot"]],
-        "Yv":    [None, ["v"]],
-        "Yr":    [None, ["r"]],
-        "Yvdot": [None, ["vdot"]],
-        "Nv":    [None, ["v"]],
-        "Nr":    [None, ["r"]],
-        "Nvdot": [None, ["vdot"]],
-    }
-    results = reg.fit(term_spec)
-    for eq, res in results.items():
-        print(f"\n--- Gleichung {eq}: R^2={res.rsquared:.3f} ---")
-        print(res.params.round(5))
+    regs = {}
+    for label, model, term_spec, out_path in configs:
+        reg = ForceRegression(model=model, sd=kf.sd, t_settle=30.0)
+        reg.add_run(result, kf, name="TC_20.0_stb_turn")
+        reg.build_dataset()
+        results = reg.fit(term_spec, method="ridge")
+        regs[label] = reg
 
-    print("\nDiagnose (Gleichung X):")
-    print(reg.summaries()["X"])
+        print(f"\n=== Parametersatz '{label}' (known_forces={model.known_forces}) ===")
+        print(f"Datensatz: {len(reg.dataset)} Zeilen nach Ausschluss der Einschwingphase")
+        for eq, res in results.items():
+            print(f"Gleichung {eq}: R^2={res.rsquared:.3f}")
+            print(res.params.round(5))
 
-    path = reg.to_yaml()
-    print(f"\nRegressierte Koeffizienten gespeichert: {path}")
+        path = reg.to_yaml(out_path)
+        print(f"Regressierte Koeffizienten gespeichert: {path}")
+
+    print("\nDiagnose (Gleichung X, Parametersatz 'abkowitz_full'):")
+    print(regs["abkowitz"].summaries()["X"])
+
+    import matplotlib.pyplot as plt
+    for label, reg in regs.items():
+        for eq in ("X", "Y", "N"):
+            ax1, _ = reg.plot_fit(eq)
+            ax1.set_title(f"[{label}] {ax1.get_title()}")
+    plt.show()

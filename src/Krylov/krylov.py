@@ -1244,6 +1244,9 @@ class KrylovModel:
     force_columns = ["kr_X", "kr_Y", "kr_N", "pod_X", "pod_Y", "pod_N",
                      "wind_X", "wind_Y", "wind_N",
                      "F_X", "F_Y", "M_N", "cns"]
+    # ForceRegression.fit (siehe REGRESSION.md): Pod- und Windkraft gelten als
+    # bekannt und werden vor der Regression von der Gesamtkraft abgezogen.
+    known_forces = ("pod", "wind")
 
     def __init__(self, kf: Krylov_forces):
         self.kf = kf

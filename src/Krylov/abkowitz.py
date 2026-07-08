@@ -188,12 +188,23 @@ class AbkowitzModel:
     wirken Pod-/Ruderkraefte zusaetzlich zu den Rumpfpolynomen. Die Auswahl
     faellt beim Registrieren/Starten der Simulation ueber den Modellnamen,
     z.B. sim.add_model("abkowitz_pod", AbkowitzModel.from_yaml(..., pod_forces=...)).
+
+    known_forces (siehe REGRESSION.md/ForceRegression.fit): welche bekannten
+    Fremdkraefte bei der Regression von der Gesamtkraft abgezogen werden,
+    bevor der Rest gegen die term_spec-Terme gefittet wird. Default
+    `("pod", "wind")` (Pod-Kraft aus kf.calc_pod_forces gilt als bekannt).
+    Ein "volles" Abkowitz-Modell, das Pod-/Ruderkraefte selbst ueber die
+    "delta"-Variable mitregressieren soll, setzt `known_forces=("wind",)` -
+    z.B. AbkowitzModel.from_yaml(..., known_forces=("wind",)) fuer
+    "abkowitz_full".
     """
 
-    def __init__(self, coeffs: dict, sd, eps: float, pod_forces=None):
+    def __init__(self, coeffs: dict, sd, eps: float, pod_forces=None,
+                 known_forces=("pod", "wind")):
         self.sd = sd
         self.eps = eps
         self.pod_forces = pod_forces
+        self.known_forces = tuple(known_forces)
         self.force_columns = (["hull_X", "hull_Y", "hull_N",
                                "pod_X", "pod_Y", "pod_N",
                                "F_X", "F_Y", "M_N"]
@@ -221,9 +232,11 @@ class AbkowitzModel:
             (u_sym, v_sym, r_sym, udot_sym, vdot_sym, rdot_sym), lhs_sym, modules="numpy")
 
     @classmethod
-    def from_yaml(cls, path: str, sd, eps: float, pod_forces=None):
+    def from_yaml(cls, path: str, sd, eps: float, pod_forces=None,
+                  known_forces=("pod", "wind")):
         with open(path) as f:
-            return cls(yaml.safe_load(f), sd, eps, pod_forces=pod_forces)
+            return cls(yaml.safe_load(f), sd, eps, pod_forces=pod_forces,
+                       known_forces=known_forces)
 
     def _primes(self, y, inp):
         U = max(np.sqrt(y[3]**2 + y[4]**2), self.eps)
@@ -296,7 +309,7 @@ if __name__ == "__main__":
     # Smoke-Test mit der echten Koeffizientendatei und den echten Schiffsdaten
     from Krylov.krylov_data import ShipConfig
 
-    with open("data/03_primary/wlfa/abkowitz_coefficients.yml") as f:
+    with open("data/05_model_input/wlfa/regressed/abkowitz_coefficients_regressed_test.yml") as f:
         coeffs = yaml.safe_load(f)
     with open("data/01_raw/wlfa/ship_data.yml") as f:
         sd = ShipConfig(**yaml.safe_load(f))
